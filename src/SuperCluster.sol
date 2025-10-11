@@ -128,4 +128,14 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     function getPilots() external view returns (address[] memory) {
         return pilots;
     }
+
+    /**
+     * @dev Register a new pilot (only owner)
+     */
+    function registerPilot(address pilot) external onlyOwner {
+        if (registeredPilots[pilot]) revert PilotAlreadyRegistered();
+        registeredPilots[pilot] = true;
+        pilots.push(pilot);
+        emit PilotRegistered(pilot);
+    }
 }
