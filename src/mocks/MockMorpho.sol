@@ -43,11 +43,6 @@ contract MockMorpho is IMorphoStaticTyping {
     mapping(uint256 => bool) public isLltvEnabled;
     mapping(address => uint256) public nonce;
 
-    // Simple compatibility layer for ILendingProtocol-style calls
-    mapping(address => uint256) public simpleBalances;
-    uint256 public simpleTotalAssets;
-    address public defaultLoanToken;
-
     constructor() {
         require(msg.sender != address(0), ErrorsLib.ZERO_ADDRESS);
         owner = msg.sender;
@@ -59,41 +54,6 @@ contract MockMorpho is IMorphoStaticTyping {
     modifier onlyOwner() {
         require(msg.sender == owner, ErrorsLib.NOT_OWNER);
         _;
-    }
-
-    // ===== Compatibility helpers =====
-    function setDefaultLoanToken(address token) external onlyOwner {
-        defaultLoanToken = token;
-    }
-
-    // Minimal supply(uint256) wrapper to accept plain supply calls
-    function supply(uint256 amount) external returns (uint256) {
-        require(defaultLoanToken != address(0), "Default token not set");
-        if (amount == 0) return 0;
-        IERC20(defaultLoanToken).safeTransferFrom(msg.sender, address(this), amount);
-        simpleBalances[msg.sender] += amount;
-        simpleTotalAssets += amount;
-        return amount;
-    }
-
-    // Minimal withdraw(uint256) wrapper to satisfy ILendingProtocol
-    function withdraw(uint256 amount) external returns (uint256) {
-        uint256 bal = simpleBalances[msg.sender];
-        uint256 toWithdraw = amount;
-        if (toWithdraw > bal) toWithdraw = bal;
-        if (toWithdraw == 0) return 0;
-        simpleBalances[msg.sender] = bal - toWithdraw;
-        simpleTotalAssets -= toWithdraw;
-        IERC20(defaultLoanToken).safeTransfer(msg.sender, toWithdraw);
-        return toWithdraw;
-    }
-
-    function balanceOf(address user) external view returns (uint256) {
-        return simpleBalances[user];
-    }
-
-    function totalAssets() external view returns (uint256) {
-        return simpleTotalAssets;
     }
 
     function supply(

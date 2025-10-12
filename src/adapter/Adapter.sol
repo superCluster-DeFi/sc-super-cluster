@@ -7,18 +7,21 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 /**
  * @title Adapter
- * @dev Base adapter contract that other adapters can inherit from
+ * @dev Base adapter contract with real protocol query patterns
  */
 abstract contract Adapter is IAdapter, Ownable, ReentrancyGuard {
-    address public immutable IDRX;
+    address public immutable TOKEN;
     address public immutable PROTOCOL_ADDRESS;
     string public protocolName;
     string public pilotStrategy;
     bool public isActive;
+    uint256 public totalDeposited;
 
     // Events
     event AdapterActivated();
     event AdapterDeactivated();
+    event Deposited(uint256 amount);
+    event Withdrawn(uint256 amount);
 
     // Errors
     error AdapterNotActive();
@@ -30,10 +33,10 @@ abstract contract Adapter is IAdapter, Ownable, ReentrancyGuard {
         _;
     }
 
-    constructor(address _idrx, address _protocolAddress, string memory _protocolName, string memory _protocolStrategy)
+    constructor(address _token, address _protocolAddress, string memory _protocolName, string memory _protocolStrategy)
         Ownable(msg.sender)
     {
-        IDRX = _idrx;
+        TOKEN = _token;
         PROTOCOL_ADDRESS = _protocolAddress;
         protocolName = _protocolName;
         pilotStrategy = _protocolStrategy;
@@ -41,19 +44,19 @@ abstract contract Adapter is IAdapter, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Activate the adapter
+     * @dev Get balance from protocol (implemented by child contracts)
      */
-    function activate() external onlyOwner {
-        isActive = true;
-        emit AdapterActivated();
-    }
+    function getBalance() external view virtual override returns (uint256);
 
     /**
-     * @dev Deactivate the adapter
+     * @dev Update internal tracking
      */
-    function deactivate() external onlyOwner {
-        isActive = false;
-        emit AdapterDeactivated();
+    function _updateTotalDeposited(uint256 amount, bool isDeposit) internal {
+        if (isDeposit) {
+            totalDeposited += amount;
+        } else {
+            totalDeposited = totalDeposited >= amount ? totalDeposited - amount : 0;
+        }
     }
 
     /**
@@ -72,5 +75,21 @@ abstract contract Adapter is IAdapter, Ownable, ReentrancyGuard {
 
     function getPilotStrategy() external view override returns (string memory) {
         return pilotStrategy;
+    }
+
+    /**
+     * @dev Activate the adapter
+     */
+    function activate() external onlyOwner {
+        isActive = true;
+        emit AdapterActivated();
+    }
+
+    /**
+     * @dev Deactivate the adapter
+     */
+    function deactivate() external onlyOwner {
+        isActive = false;
+        emit AdapterDeactivated();
     }
 }

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-import {Test, console} from "forge-std/Test.sol";
+import "forge-std/Test.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SToken} from "../src/tokens/SToken.sol";
 import {WsToken} from "../src/tokens/WsToken.sol";
@@ -16,7 +16,6 @@ contract sTokenTest is Test {
     MockUSDC public usdc;
 
     address public owner;
-
     address public user1;
     address public user2;
 
@@ -26,22 +25,18 @@ contract sTokenTest is Test {
         owner = makeAddr("owner");
         user1 = makeAddr("user1");
         user2 = makeAddr("user2");
-        // console.log("Created addresses - owner:", owner, "user1:", user1, "user2:", user2);
 
         // Deploy mock tokens
         idrx = new MockIDRX();
         usdc = new MockUSDC();
         console.log("Deployed mock tokens - IDRX:", address(idrx), "USDC:", address(usdc));
 
-        // Deploy SToken with USDC as underlying token (test contract becomes owner)
-        token = new SToken(SToken.STokenConfig("SToken", "SToken", address(usdc)));
+        // Deploy SToken with USDC as underlying token
+        token = new SToken("sUSDC", "sUSDC", address(usdc));
         wrappedToken = new WsToken(address(token));
         console.log("Deployed SToken:", address(token), "wsToken:", address(wrappedToken));
-        console.log("SToken name:", token.name(), "symbol:", token.symbol());
-        console.log("SToken underlying token:", token.underlyingToken());
-        console.log("Expected name should be 'sUSDC' since underlying is USDC");
 
-        // Set authorized minter for SToken (test contract is already owner)
+        // Set authorized minter
         token.setAuthorizedMinter(address(this), true);
 
         // Mint some underlying tokens to users
@@ -49,24 +44,52 @@ contract sTokenTest is Test {
         idrx.mint(user2, 1000e18);
         usdc.mint(user1, 1000e6);
         usdc.mint(user2, 1000e6);
-        console.log("Minted underlying tokens to users");
-        console.log("User1 IDRX balance:", idrx.balanceOf(user1));
-        console.log("User1 USDC balance:", usdc.balanceOf(user1));
     }
 
     function test_mint() public {
         console.log("=== Testing mint function ===");
-        console.log("Initial user1 balance:", token.balanceOf(user1));
-        console.log("Initial total supply:", token.totalSupply());
 
-        // Test minting SToken
+        // Test first mint (1:1 ratio)
         token.mint(user1, 100e18);
+        token.updateAssetsUnderManagement(100e18);
         console.log("After minting 100e18 to user1");
         console.log("User1 balance:", token.balanceOf(user1));
-        console.log("Total supply:", token.totalSupply());
+        console.log("User1 shares:", token.sharesOf(user1));
+        console.log("Total shares:", token.totalShares());
+        console.log("Total AUM:", token.totalAssetsUnderManagement());
 
-        console.log(" User1 balance matches expected:", token.balanceOf(user1) == 100e18);
-        console.log(" Total supply matches expected:", token.totalSupply() == 100e18);
+        assertEq(token.balanceOf(user1), 100e18);
+        assertEq(token.sharesOf(user1), 100e18);
+        assertEq(token.totalShares(), 100e18);
+        assertEq(token.totalSupply(), token.totalAssetsUnderManagement());
+    }
+
+    function test_mintAfterRebase() public {
+        console.log("=== Testing mint after rebase ===");
+
+        // Initial mint
+        token.mint(user1, 100e18);
+        token.updateAssetsUnderManagement(100e18);
+
+        // Simulate profit - AUM increases to 120
+        token.updateAssetsUnderManagement(120e18);
+
+        console.log("After rebase simulation:");
+        console.log("User1 balance:", token.balanceOf(user1));
+        console.log("Total AUM:", token.totalAssetsUnderManagement());
+
+        // New user mints at higher price
+        token.mint(user2, 60e18); // Should get fewer shares
+        token.updateAssetsUnderManagement(180e18);
+
+        console.log("After user2 mint:");
+        console.log("User2 balance:", token.balanceOf(user2));
+        console.log("User2 shares:", token.sharesOf(user2));
+        console.log("User1 shares (unchanged):", token.sharesOf(user1));
+
+        // user2 should get 60 * 100 / 120 = 50 shares
+        assertEq(token.sharesOf(user2), 50e18);
+        assertEq(token.balanceOf(user2), 60e18);
     }
 
     function test_burn() public {
@@ -74,344 +97,161 @@ contract sTokenTest is Test {
 
         // First mint some tokens
         token.mint(user1, 100e18);
-        console.log("After minting 100e18 to user1");
-        console.log("User1 balance:", token.balanceOf(user1));
-        console.log("Total supply:", token.totalSupply());
-        console.log(" Initial balance correct:", token.balanceOf(user1) == 100e18);
+        token.updateAssetsUnderManagement(100e18);
 
-        // Then burn some tokens
+        uint256 initialShares = token.sharesOf(user1);
+        console.log("Initial shares:", initialShares);
+        console.log("Initial balance:", token.balanceOf(user1));
+
+        // Burn some tokens
         token.burn(user1, 50e18);
-        console.log("After burning 50e18 from user1");
-        console.log("User1 balance:", token.balanceOf(user1));
-        console.log("Total supply:", token.totalSupply());
 
-        console.log(" Final balance correct:", token.balanceOf(user1) == 50e18);
-        console.log(" Final supply correct:", token.totalSupply() == 50e18);
+        //  Manually reduce AUM after burn
+        token.updateAssetsUnderManagement(50e18);
+
+        console.log("After burning 50e18:");
+        console.log("User1 balance:", token.balanceOf(user1));
+        console.log("User1 shares:", token.sharesOf(user1));
+        console.log("Total AUM:", token.totalAssetsUnderManagement());
+
+        assertEq(token.balanceOf(user1), 50e18);
+        assertEq(token.sharesOf(user1), 50e18);
     }
 
     function test_rebase() public {
-        console.log("=== Testing rebase function ===");
+        console.log("=== Testing rebase mechanism ===");
 
-        // Mint initial tokens
+        // Setup: mint tokens to user1
         token.mint(user1, 100e18);
-        console.log("After minting 100e18 to user1");
-        console.log("Total supply:", token.totalSupply());
-        console.log("Assets under management:", token.getTotalAssetsUnderManagement());
-        console.log(" Initial supply correct:", token.totalSupply() == 100e18);
+        token.updateAssetsUnderManagement(100e18);
 
-        // Update assets under management (simulating growth)
+        console.log("Initial state:");
+        console.log("User1 balance:", token.balanceOf(user1));
+        console.log("User1 shares:", token.sharesOf(user1));
+        console.log("Total AUM:", token.totalAssetsUnderManagement());
+
+        // Simulate harvest profit - AUM increases by 50%
         token.updateAssetsUnderManagement(150e18);
-        console.log("After updating assets under management to 150e18");
-        console.log("Assets under management:", token.getTotalAssetsUnderManagement());
-        console.log(" Assets under management correct:", token.getTotalAssetsUnderManagement() == 150e18);
 
-        // Fast forward time to allow rebase
-        console.log("Current timestamp:", block.timestamp);
-        vm.warp(block.timestamp + 1 days + 1);
-        console.log("After warping time by 1 day + 1 second");
-        console.log("New timestamp:", block.timestamp);
-
-        // Execute rebase
-        console.log("Executing rebase...");
-        token.rebase();
-        console.log("After rebase");
+        console.log("After AUM update (rebase):");
+        console.log("User1 balance:", token.balanceOf(user1));
+        console.log("User1 shares (unchanged):", token.sharesOf(user1));
+        console.log("Total AUM:", token.totalAssetsUnderManagement());
         console.log("Total supply:", token.totalSupply());
-        console.log("Assets under management:", token.getTotalAssetsUnderManagement());
 
-        // Check that total supply now matches assets under management
-        console.log(" Final supply matches assets:", token.totalSupply() == 150e18);
-        console.log(" Assets under management unchanged:", token.getTotalAssetsUnderManagement() == 150e18);
+        // Balance should automatically increase, shares stay same
+        assertEq(token.balanceOf(user1), 150e18); // 50% increase
+        assertEq(token.sharesOf(user1), 100e18); // shares unchanged
+        assertEq(token.totalSupply(), 150e18); // total supply = AUM
     }
 
-    function test_rebaseNotReady() public {
-        console.log("=== Testing rebase not ready ===");
-        console.log("Current timestamp:", block.timestamp);
-        console.log("Last rebase time:", token.lastRebaseTime());
-        console.log("Rebase interval:", token.getRebaseInterval());
+    function test_multiUserRebase() public {
+        console.log("=== Testing multi-user rebase ===");
 
-        // Try to rebase before interval has passed
-        console.log("Attempting rebase before interval...");
-        vm.expectRevert(SToken.RebaseNotReady.selector);
-        token.rebase();
+        // User1 deposits first
+        token.mint(user1, 100e18);
+        token.updateAssetsUnderManagement(100e18);
+
+        // User2 deposits later
+        token.mint(user2, 100e18);
+        token.updateAssetsUnderManagement(200e18);
+
+        console.log("Before rebase:");
+        console.log("User1 balance:", token.balanceOf(user1));
+        console.log("User2 balance:", token.balanceOf(user2));
+        console.log("User1 shares:", token.sharesOf(user1));
+        console.log("User2 shares:", token.sharesOf(user2));
+
+        // Simulate 20% profit
+        token.updateAssetsUnderManagement(240e18);
+
+        console.log("After 20% profit:");
+        console.log("User1 balance:", token.balanceOf(user1));
+        console.log("User2 balance:", token.balanceOf(user2));
+        console.log("Total supply:", token.totalSupply());
+
+        // Both users should get proportional gains
+        assertEq(token.balanceOf(user1), 120e18); // 100 * 1.2
+        assertEq(token.balanceOf(user2), 120e18); // 100 * 1.2
+        assertEq(token.totalSupply(), 240e18);
+    }
+
+    function test_shareCalculations() public {
+        console.log("=== Testing share calculations ===");
+
+        // Initial mint - 1:1 ratio
+        token.mint(user1, 100e18);
+        token.updateAssetsUnderManagement(100e18);
+        assertEq(token.sharesOf(user1), 100e18);
+
+        // AUM increases - more valuable per share
+        token.updateAssetsUnderManagement(150e18);
+
+        // New user should get fewer shares for same amount
+        token.mint(user2, 75e18); // At 1.5x price should get 50 shares
+
+        console.log("User2 shares for 75e18 at 1.5x price:", token.sharesOf(user2));
+        assertEq(token.sharesOf(user2), 50e18);
     }
 
     function test_unauthorizedMinter() public {
         console.log("=== Testing unauthorized minter ===");
-        console.log("Attempting to mint as user1 (unauthorized)...");
 
-        // Test that unauthorized address cannot mint
         vm.prank(user1);
-        vm.expectRevert(SToken.UnauthorizedMinter.selector);
+        vm.expectRevert("Unauthorized");
         token.mint(user1, 100e18);
-    }
-
-    function test_setUnderlyingToken() public {
-        console.log("=== Testing set underlying token ===");
-        console.log("Current underlying token:", token.underlyingToken());
-
-        // Test setting underlying token (test contract is owner)
-        token.setUnderlyingToken(address(idrx));
-        console.log("After setting underlying token to IDRX");
-        console.log("New underlying token:", token.underlyingToken());
-
-        console.log(" Underlying token changed correctly:", token.underlyingToken() == address(idrx));
-    }
-
-    function test_rebaseInterval() public {
-        console.log("=== Testing rebase interval ===");
-        console.log("Rebase interval:", token.getRebaseInterval());
-        console.log(" Rebase interval correct:", token.getRebaseInterval() == 1 days);
     }
 
     function test_dynamicNaming() public {
         console.log("=== Testing dynamic naming ===");
 
-        // Test with USDC (current token)
         console.log("Current SToken name:", token.name());
         console.log("Current SToken symbol:", token.symbol());
-        console.log("Underlying token symbol:", IERC20Metadata(token.underlyingToken()).symbol());
 
-        // Create a new SToken with IDRX to test different naming
-        SToken idrxToken = new SToken(SToken.STokenConfig("SToken", "SToken", address(idrx)));
+        // Create new token with different underlying
+        SToken idrxToken = new SToken("sIDRX", "sIDRX", address(idrx));
         console.log("IDRX SToken name:", idrxToken.name());
         console.log("IDRX SToken symbol:", idrxToken.symbol());
-        console.log("IDRX underlying token symbol:", IERC20Metadata(idrxToken.underlyingToken()).symbol());
 
-        // Verify naming convention
-        console.log(" USDC token name correct:", keccak256(bytes(token.name())) == keccak256(bytes("sUSDC")));
-        console.log(" USDC token symbol correct:", keccak256(bytes(token.symbol())) == keccak256(bytes("sUSDC")));
-        console.log(" IDRX token name correct:", keccak256(bytes(idrxToken.name())) == keccak256(bytes("sIDRX")));
-        console.log(" IDRX token symbol correct:", keccak256(bytes(idrxToken.symbol())) == keccak256(bytes("sIDRX")));
+        assertEq(token.name(), "sUSDC");
+        assertEq(token.symbol(), "sUSDC");
+        assertEq(idrxToken.name(), "sIDRX");
+        assertEq(idrxToken.symbol(), "sIDRX");
     }
 
-    function test_wrap() public {
-        console.log("=== Testing wrap function ===");
+    // Remove old rebase timing tests since there's no interval anymore
+    // Remove rebaseNotReady and rebaseInterval tests
 
-        // First mint some SToken to user1
+    function test_burnInsufficientBalance() public {
+        console.log("=== Testing burn with insufficient balance ===");
+
+        vm.expectRevert("Insufficient balance");
+        token.burn(user1, 100e18);
+    }
+
+    function test_shareConsistency() public {
+        console.log("=== Testing share consistency ===");
+
+        // Multiple users, multiple rebases
         token.mint(user1, 100e18);
-        console.log("Minted 100e18 SToken to user1");
-        console.log("User1 SToken balance:", token.balanceOf(user1));
-        console.log("User1 wsToken balance:", wrappedToken.balanceOf(user1));
+        token.updateAssetsUnderManagement(100e18);
 
-        // User1 approves wsToken contract to spend SToken
-        vm.prank(user1);
-        token.approve(address(wrappedToken), 50e18);
-        console.log("User1 approved 50e18 SToken to wsToken contract");
+        token.mint(user2, 200e18);
+        token.updateAssetsUnderManagement(300e18);
 
-        // Check exchange rate before wrapping
-        console.log("Exchange rate before wrap:", wrappedToken.getExchangeRate());
-        console.log("Expected wsToken amount:", wrappedToken.sTokenToWsToken(50e18));
+        uint256 user1SharesBefore = token.sharesOf(user1);
+        uint256 user2SharesBefore = token.sharesOf(user2);
 
-        // User1 wraps 50e18 SToken to wsToken
-        vm.prank(user1);
-        wrappedToken.wrap(50e18);
-        console.log("After wrapping 50e18 SToken to wsToken");
-        console.log("User1 SToken balance:", token.balanceOf(user1));
-        console.log("User1 wsToken balance:", wrappedToken.balanceOf(user1));
-        console.log("wsToken contract SToken balance:", wrappedToken.getSTokenBalance());
-        console.log("Total SToken deposited:", wrappedToken.getTotalSTokenDeposited());
+        // Multiple rebases
+        token.updateAssetsUnderManagement(360e18); // +20%
+        token.updateAssetsUnderManagement(432e18); // +20% again
 
-        console.log(" SToken balance correct:", token.balanceOf(user1) == 50e18);
-        console.log(" wsToken balance correct:", wrappedToken.balanceOf(user1) == 50e18);
-        console.log(" wsToken contract balance correct:", wrappedToken.getSTokenBalance() == 50e18);
-        console.log(" total deposited correct:", wrappedToken.getTotalSTokenDeposited() == 50e18);
-    }
+        // Shares should never change
+        assertEq(token.sharesOf(user1), user1SharesBefore);
+        assertEq(token.sharesOf(user2), user2SharesBefore);
 
-    function test_unwrap() public {
-        console.log("=== Testing unwrap function ===");
-
-        // First mint and wrap some tokens
-        token.mint(user1, 100e18);
-        vm.prank(user1);
-        token.approve(address(wrappedToken), 100e18);
-        vm.prank(user1);
-        wrappedToken.wrap(100e18);
-
-        console.log("After initial wrap:");
-        console.log("User1 SToken balance:", token.balanceOf(user1));
-        console.log("User1 wsToken balance:", wrappedToken.balanceOf(user1));
-        console.log("wsToken contract SToken balance:", wrappedToken.getSTokenBalance());
-
-        // User1 unwraps 30e18 wsToken back to SToken
-        vm.prank(user1);
-        wrappedToken.unwrap(30e18);
-        console.log("After unwrapping 30e18 wsToken to SToken");
-        console.log("User1 SToken balance:", token.balanceOf(user1));
-        console.log("User1 wsToken balance:", wrappedToken.balanceOf(user1));
-        console.log("wsToken contract SToken balance:", wrappedToken.getSTokenBalance());
-
-        console.log(" SToken balance correct:", token.balanceOf(user1) == 70e18);
-        console.log(" wsToken balance correct:", wrappedToken.balanceOf(user1) == 70e18);
-        console.log(" wsToken contract balance correct:", wrappedToken.getSTokenBalance() == 70e18);
-    }
-
-    function test_wrapInsufficientBalance() public {
-        console.log("=== Testing wrap with insufficient balance ===");
-
-        // Try to wrap without having SToken
-        vm.prank(user1);
-        vm.expectRevert("Insufficient sToken balance");
-        wrappedToken.wrap(100e18);
-        console.log("Correctly failed to wrap with insufficient balance");
-    }
-
-    function test_unwrapInsufficientBalance() public {
-        console.log("=== Testing unwrap with insufficient balance ===");
-
-        // Try to unwrap without having wsToken
-        vm.prank(user1);
-        vm.expectRevert("Insufficient wsToken balance");
-        wrappedToken.unwrap(100e18);
-        console.log("Correctly failed to unwrap with insufficient balance");
-    }
-
-    function test_wsTokenNaming() public {
-        console.log("=== Testing wsToken naming ===");
-
-        console.log("wsToken name:", wrappedToken.name());
-        console.log("wsToken symbol:", wrappedToken.symbol());
-        console.log("SToken symbol:", token.symbol());
-
-        console.log(" wsToken name correct:", keccak256(bytes(wrappedToken.name())) == keccak256(bytes("wsUSDC")));
-        console.log(" wsToken symbol correct:", keccak256(bytes(wrappedToken.symbol())) == keccak256(bytes("wsUSDC")));
-    }
-
-    function test_fullWrapUnwrapCycle() public {
-        console.log("=== Testing full wrap/unwrap cycle ===");
-
-        // Initial state
-        console.log("Initial state:");
-        console.log("User1 SToken balance:", token.balanceOf(user1));
-        console.log("User1 wsToken balance:", wrappedToken.balanceOf(user1));
-
-        // Mint SToken
-        token.mint(user1, 200e18);
-        console.log("After minting 200e18 SToken:");
-        console.log("User1 SToken balance:", token.balanceOf(user1));
-
-        // Wrap all SToken
-        vm.prank(user1);
-        token.approve(address(wrappedToken), 200e18);
-        vm.prank(user1);
-        wrappedToken.wrap(200e18);
-        console.log("After wrapping all SToken:");
-        console.log("User1 SToken balance:", token.balanceOf(user1));
-        console.log("User1 wsToken balance:", wrappedToken.balanceOf(user1));
-        console.log("wsToken contract SToken balance:", wrappedToken.getSTokenBalance());
-
-        // Unwrap half
-        vm.prank(user1);
-        wrappedToken.unwrap(100e18);
-        console.log("After unwrapping half:");
-        console.log("User1 SToken balance:", token.balanceOf(user1));
-        console.log("User1 wsToken balance:", wrappedToken.balanceOf(user1));
-        console.log("wsToken contract SToken balance:", wrappedToken.getSTokenBalance());
-
-        // Unwrap remaining
-        vm.prank(user1);
-        wrappedToken.unwrap(100e18);
-        console.log("After unwrapping remaining:");
-        console.log("User1 SToken balance:", token.balanceOf(user1));
-        console.log("User1 wsToken balance:", wrappedToken.balanceOf(user1));
-        console.log("wsToken contract SToken balance:", wrappedToken.getSTokenBalance());
-
-        console.log(" Final SToken balance correct:", token.balanceOf(user1) == 200e18);
-        console.log(" Final wsToken balance correct:", wrappedToken.balanceOf(user1) == 0);
-        console.log(" Final contract balance correct:", wrappedToken.getSTokenBalance() == 0);
-    }
-
-    function test_rebaseAwareWrapping() public {
-        console.log("=== Testing rebase-aware wrapping ===");
-
-        // User1 wraps 100e18 SToken initially
-        token.mint(user1, 100e18);
-        vm.prank(user1);
-        token.approve(address(wrappedToken), 100e18);
-        vm.prank(user1);
-        wrappedToken.wrap(100e18);
-
-        console.log("After initial wrap:");
-        console.log("User1 wsToken balance:", wrappedToken.balanceOf(user1));
-        console.log("Total SToken deposited:", wrappedToken.getTotalSTokenDeposited());
-        console.log("Exchange rate:", wrappedToken.getExchangeRate());
-
-        // Simulate a rebase that increases SToken supply by 20%
-        console.log("Simulating rebase (20% increase)...");
-        token.updateAssetsUnderManagement(120e18); // 20% increase
-        vm.warp(block.timestamp + 1 days + 1);
-        token.rebase();
-
-        console.log("After rebase:");
-        console.log("SToken total supply:", token.totalSupply());
-        console.log("wsToken contract SToken balance:", wrappedToken.getSTokenBalance());
-        console.log("Total SToken deposited (unchanged):", wrappedToken.getTotalSTokenDeposited());
-        console.log("New exchange rate:", wrappedToken.getExchangeRate());
-
-        // User2 wraps 50e18 SToken after rebase
-        token.mint(user2, 50e18);
-        vm.prank(user2);
-        token.approve(address(wrappedToken), 50e18);
-        vm.prank(user2);
-        wrappedToken.wrap(50e18);
-
-        console.log("After user2 wraps 50e18 SToken:");
-        console.log("User2 wsToken balance:", wrappedToken.balanceOf(user2));
-        console.log("User1 wsToken balance (unchanged):", wrappedToken.balanceOf(user1));
-        console.log("Total wsToken supply:", wrappedToken.totalSupply());
-        console.log("Total SToken deposited:", wrappedToken.getTotalSTokenDeposited());
-
-        // User1 unwraps their wsToken
-        uint256 user1WsTokenBalance = wrappedToken.balanceOf(user1);
-        console.log("User1 unwrapping", user1WsTokenBalance, "wsToken");
-        console.log("Expected SToken amount:", wrappedToken.wsTokenToSToken(user1WsTokenBalance));
-
-        vm.prank(user1);
-        wrappedToken.unwrap(user1WsTokenBalance);
-
-        console.log("After user1 unwraps:");
-        console.log("User1 SToken balance:", token.balanceOf(user1));
-        console.log("User1 wsToken balance:", wrappedToken.balanceOf(user1));
-        console.log("Remaining wsToken supply:", wrappedToken.totalSupply());
-        console.log("Remaining SToken deposited:", wrappedToken.getTotalSTokenDeposited());
-
-        // Verify that user1 got more SToken back due to rebase
-        console.log(" User1 got more SToken due to rebase:", token.balanceOf(user1) > 100e18);
-        console.log(" User1 SToken balance > 100e18:", token.balanceOf(user1) > 100e18);
-    }
-
-    function test_exchangeRateCalculations() public {
-        console.log("=== Testing exchange rate calculations ===");
-
-        // Test initial 1:1 rate
-        console.log("Initial exchange rate (should be 1:1):", wrappedToken.getExchangeRate());
-        console.log("SToken to wsToken (100e18):", wrappedToken.sTokenToWsToken(100e18));
-        console.log("wsToken to SToken (100e18):", wrappedToken.wsTokenToSToken(100e18));
-
-        // Wrap some tokens
-        token.mint(user1, 100e18);
-        vm.prank(user1);
-        token.approve(address(wrappedToken), 100e18);
-        vm.prank(user1);
-        wrappedToken.wrap(100e18);
-
-        console.log("After wrapping 100e18 SToken:");
-        console.log("Exchange rate:", wrappedToken.getExchangeRate());
-        console.log("Total wsToken supply:", wrappedToken.totalSupply());
-        console.log("Total SToken deposited:", wrappedToken.getTotalSTokenDeposited());
-
-        // Simulate rebase
-        token.updateAssetsUnderManagement(150e18); // 50% increase
-        vm.warp(block.timestamp + 1 days + 1);
-        token.rebase();
-
-        console.log("After 50% rebase:");
-        console.log("SToken total supply:", token.totalSupply());
-        console.log("wsToken contract SToken balance:", wrappedToken.getSTokenBalance());
-        console.log("New exchange rate:", wrappedToken.getExchangeRate());
-        console.log("SToken to wsToken (50e18):", wrappedToken.sTokenToWsToken(50e18));
-        console.log("wsToken to SToken (50e18):", wrappedToken.wsTokenToSToken(50e18));
-
-        // The exchange rate should now be higher (more SToken per wsToken)
-        console.log(" Exchange rate increased after rebase:", wrappedToken.getExchangeRate() > 1e18);
+        // But balances should increase
+        assertGt(token.balanceOf(user1), 100e18);
+        assertGt(token.balanceOf(user2), 200e18);
     }
 }

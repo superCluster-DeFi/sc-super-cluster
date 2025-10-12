@@ -10,7 +10,8 @@ import {IAdapter} from "../interfaces/IAdapter.sol";
 contract Pilot is IPilot, Ownable, ReentrancyGuard {
     string public override name;
     string public _description;
-    address public immutable IDRX;
+    address public immutable TOKEN;
+    address public superClusterAddress;
 
     // Strategy tracking
     address[] public strategyAdapters;
@@ -30,10 +31,10 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     error InsufficientBalance();
     error ZeroAmount();
 
-    constructor(string memory _name, string memory __description, address _idrx) Ownable(msg.sender) {
+    constructor(string memory _name, string memory __description, address _token) Ownable(msg.sender) {
         name = _name;
         _description = __description;
-        IDRX = _idrx;
+        TOKEN = _token;
     }
 
     /**
@@ -56,20 +57,55 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
         }
         if (totalAllocation != 10000) revert InvalidAllocation();
 
-        // Check IDRX balance
-        uint256 balance = IERC20(IDRX).balanceOf(address(this));
+        // Check TOKEN balance
+        uint256 balance = IERC20(TOKEN).balanceOf(address(this));
         if (balance < amount) revert InsufficientBalance();
 
         // Distribute funds to adapters
         for (uint256 i = 0; i < adapters.length; i++) {
             uint256 adapterAmount = (amount * allocations[i]) / 10000;
             if (adapterAmount > 0) {
-                IERC20(IDRX).approve(adapters[i], adapterAmount);
+                IERC20(TOKEN).approve(adapters[i], adapterAmount);
                 IAdapter(adapters[i]).deposit(adapterAmount);
             }
         }
 
         emit Invested(amount, adapters, allocations);
+    }
+
+    /**
+     * @dev Auto-invest funds from SuperCluster
+     */
+    function receiveAndInvest(uint256 amount) external override {
+        require(msg.sender == superClusterAddress, "Only SuperCluster");
+
+        // Auto-invest based on current strategy
+        if (strategyAdapters.length > 0 && strategyAllocations.length > 0) {
+            _distributeToAdapters(amount);
+        }
+        // If no strategy set, keep idle in pilot
+    }
+
+    /**
+     * @dev Distribute to adapters based on allocation
+     */
+    function _distributeToAdapters(uint256 totalAmount) internal {
+        for (uint256 i = 0; i < strategyAdapters.length; i++) {
+            address adapter = strategyAdapters[i];
+            uint256 allocation = strategyAllocations[i];
+
+            if (allocation > 0 && isActiveAdapter[adapter]) {
+                uint256 adapterAmount = (totalAmount * allocation) / 10000;
+
+                if (adapterAmount > 0) {
+                    // Transfer to adapter
+                    bool status = IERC20(TOKEN).transfer(adapter, adapterAmount);
+                    require(status, "Transfer failed");
+                    // Trigger deposit
+                    IAdapter(adapter).deposit(adapterAmount);
+                }
+            }
+        }
     }
 
     /**
@@ -126,25 +162,6 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
      */
     function getStrategy() external view override returns (address[] memory adapters, uint256[] memory allocations) {
         return (strategyAdapters, strategyAllocations);
-    }
-
-    /**
-     * @dev Get total value managed by this pilot
-     */
-    function getTotalValue() external view override returns (uint256) {
-        uint256 totalValue = 0;
-
-        // Add IDRX balance held by pilot
-        totalValue += IERC20(IDRX).balanceOf(address(this));
-
-        // Add balances in all active adapters
-        for (uint256 i = 0; i < strategyAdapters.length; i++) {
-            if (isActiveAdapter[strategyAdapters[i]]) {
-                totalValue += IAdapter(strategyAdapters[i]).getBalance();
-            }
-        }
-
-        return totalValue;
     }
 
     /**
@@ -210,9 +227,62 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
      * @dev Emergency withdraw all IDRX tokens
      */
     function emergencyWithdraw() external onlyOwner {
-        uint256 balance = IERC20(IDRX).balanceOf(address(this));
+        uint256 balance = IERC20(TOKEN).balanceOf(address(this));
         if (balance > 0) {
-            IERC20(IDRX).transfer(owner(), balance);
+            bool status = IERC20(TOKEN).transfer(owner(), balance);
+            require(status, "Transfer failed");
         }
+    }
+
+    /**
+     * @dev ✅ Withdraw for user (called by SuperCluster)
+     */
+    function withdrawForUser(uint256 amount) external override {
+        require(msg.sender == superClusterAddress, "Only SuperCluster");
+
+        // Withdraw proportionally from adapters
+        _withdrawFromAdapters(amount);
+
+        // Transfer to SuperCluster
+        bool status = IERC20(TOKEN).transfer(superClusterAddress, amount);
+        require(status, "Transfer failed");
+    }
+
+    /**
+     * @dev Withdraw from adapters proportionally
+     */
+    function _withdrawFromAdapters(uint256 totalAmount) internal {
+        for (uint256 i = 0; i < strategyAdapters.length; i++) {
+            address adapter = strategyAdapters[i];
+            uint256 allocation = strategyAllocations[i];
+
+            if (allocation > 0 && isActiveAdapter[adapter]) {
+                uint256 adapterWithdrawAmount = (totalAmount * allocation) / 10000;
+
+                if (adapterWithdrawAmount > 0) {
+                    uint256 sharesToWithdraw = IAdapter(adapter).convertToShares(adapterWithdrawAmount);
+
+                    if (sharesToWithdraw > 0) {
+                        IAdapter(adapter).withdraw(sharesToWithdraw);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * @dev Get total value from all adapters + idle funds
+     */
+    function getTotalValue() external view override returns (uint256) {
+        uint256 totalValue = IERC20(TOKEN).balanceOf(address(this)); // Idle funds
+
+        // Add adapter balances
+        for (uint256 i = 0; i < strategyAdapters.length; i++) {
+            if (isActiveAdapter[strategyAdapters[i]]) {
+                totalValue += IAdapter(strategyAdapters[i]).getBalance();
+            }
+        }
+
+        return totalValue;
     }
 }
