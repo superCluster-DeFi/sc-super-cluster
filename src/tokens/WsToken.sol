@@ -7,11 +7,11 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {SToken} from "./SToken.sol";
 
 contract WsToken is ERC20 {
-    address public immutable sToken;
-    IERC20 public immutable sTokenContract;
-    SToken public immutable sTokenInstance;
+    address public immutable STOKEN;
+    IERC20 public immutable STOKENCONTRACT;
+    SToken public immutable STOKENINSTANCE;
 
-    // Track total sToken deposited (not affected by rebases)
+    // Track total STOKEN deposited (not affected by rebases)
     uint256 public totalSTokenDeposited;
 
     event Wrapped(address indexed user, uint256 sTokenAmount, uint256 wsTokenAmount);
@@ -23,28 +23,28 @@ contract WsToken is ERC20 {
             string(abi.encodePacked("w", IERC20Metadata(_sToken).symbol()))
         )
     {
-        sToken = _sToken;
-        sTokenContract = IERC20(_sToken);
-        sTokenInstance = SToken(_sToken);
+        STOKEN = _sToken;
+        STOKENCONTRACT = IERC20(_sToken);
+        STOKENINSTANCE = SToken(_sToken);
     }
 
     /**
-     * @dev Wrap sToken to wsToken
-     * User must first approve this contract to spend their sToken
+     * @dev Wrap STOKEN to wsToken
+     * User must first approve this contract to spend their STOKEN
      * The conversion rate accounts for rebases that may have occurred
      */
     function wrap(uint256 sTokenAmount) external {
         require(sTokenAmount > 0, "Amount must be greater than 0");
-        require(sTokenContract.balanceOf(msg.sender) >= sTokenAmount, "Insufficient sToken balance");
+        require(STOKENCONTRACT.balanceOf(msg.sender) >= sTokenAmount, "Insufficient STOKEN balance");
 
         // Calculate wsToken amount based on current exchange rate
         uint256 wsTokenAmount = sTokenToWsToken(sTokenAmount);
         require(wsTokenAmount > 0, "wsToken amount too small");
 
-        // Transfer sToken from user to this contract
-        sTokenContract.transferFrom(msg.sender, address(this), sTokenAmount);
+        // Transfer STOKEN from user to this contract
+        STOKENCONTRACT.transferFrom(msg.sender, address(this), sTokenAmount);
 
-        // Update total deposited (this tracks the actual sToken deposited, not affected by rebases)
+        // Update total deposited (this tracks the actual STOKEN deposited, not affected by rebases)
         totalSTokenDeposited += sTokenAmount;
 
         // Mint wsToken to user
@@ -54,16 +54,16 @@ contract WsToken is ERC20 {
     }
 
     /**
-     * @dev Unwrap wsToken back to sToken
+     * @dev Unwrap wsToken back to STOKEN
      * The conversion rate accounts for rebases that may have occurred
      */
     function unwrap(uint256 wsTokenAmount) external {
         require(wsTokenAmount > 0, "Amount must be greater than 0");
         require(balanceOf(msg.sender) >= wsTokenAmount, "Insufficient wsToken balance");
 
-        // Calculate sToken amount based on current exchange rate
+        // Calculate STOKEN amount based on current exchange rate
         uint256 sTokenAmount = wsTokenToSToken(wsTokenAmount);
-        require(sTokenContract.balanceOf(address(this)) >= sTokenAmount, "Insufficient sToken in contract");
+        require(STOKENCONTRACT.balanceOf(address(this)) >= sTokenAmount, "Insufficient STOKEN in contract");
 
         // Burn wsToken from user
         _burn(msg.sender, wsTokenAmount);
@@ -71,14 +71,14 @@ contract WsToken is ERC20 {
         // Update total deposited
         totalSTokenDeposited -= sTokenAmount;
 
-        // Transfer sToken back to user
-        sTokenContract.transfer(msg.sender, sTokenAmount);
+        // Transfer STOKEN back to user
+        STOKENCONTRACT.transfer(msg.sender, sTokenAmount);
 
         emit Unwrapped(msg.sender, wsTokenAmount, sTokenAmount);
     }
 
     /**
-     * @dev Convert sToken amount to wsToken amount
+     * @dev Convert STOKEN amount to wsToken amount
      * This accounts for rebases that may have occurred since deposits
      */
     function sTokenToWsToken(uint256 sTokenAmount) public view returns (uint256) {
@@ -88,12 +88,12 @@ contract WsToken is ERC20 {
         }
 
         // Calculate current exchange rate based on rebases
-        // wsToken amount = (sToken amount * total wsToken supply) / total sToken deposited
+        // wsToken amount = (STOKEN amount * total wsToken supply) / total STOKEN deposited
         return (sTokenAmount * totalSupply()) / totalSTokenDeposited;
     }
 
     /**
-     * @dev Convert wsToken amount to sToken amount
+     * @dev Convert wsToken amount to STOKEN amount
      * This accounts for rebases that may have occurred since deposits
      */
     function wsTokenToSToken(uint256 wsTokenAmount) public view returns (uint256) {
@@ -103,19 +103,19 @@ contract WsToken is ERC20 {
         }
 
         // Calculate current exchange rate based on rebases
-        // sToken amount = (wsToken amount * total sToken deposited) / total wsToken supply
+        // STOKEN amount = (wsToken amount * total STOKEN deposited) / total wsToken supply
         return (wsTokenAmount * totalSTokenDeposited) / totalSupply();
     }
 
     /**
-     * @dev Get the underlying sToken balance held by this contract
+     * @dev Get the underlying STOKEN balance held by this contract
      */
     function getSTokenBalance() external view returns (uint256) {
-        return sTokenContract.balanceOf(address(this));
+        return STOKENCONTRACT.balanceOf(address(this));
     }
 
     /**
-     * @dev Get the current exchange rate (sToken per wsToken)
+     * @dev Get the current exchange rate (STOKEN per wsToken)
      */
     function getExchangeRate() external view returns (uint256) {
         if (totalSupply() == 0) {
@@ -125,7 +125,7 @@ contract WsToken is ERC20 {
     }
 
     /**
-     * @dev Get the total sToken deposited (not affected by rebases)
+     * @dev Get the total STOKEN deposited (not affected by rebases)
      */
     function getTotalSTokenDeposited() external view returns (uint256) {
         return totalSTokenDeposited;

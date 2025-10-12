@@ -6,6 +6,9 @@ import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IER
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SToken} from "./tokens/SToken.sol";
+import {IPilot} from "./interfaces/IPilot.sol";
+
+import {console} from "forge-std/console.sol";
 
 contract SuperCluster is Ownable, ReentrancyGuard {
     SToken public underlyingToken; // SToken token (rebasing)
@@ -39,9 +42,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
 
         // Deploy sToken with dynamic name and symbol
         underlyingToken = new SToken(
-            SToken.STokenConfig(
-                string(abi.encodePacked("s", tokenName)), string(abi.encodePacked("s", tokenSymbol)), underlyingToken_
-            )
+            string(abi.encodePacked("s", tokenName)), string(abi.encodePacked("s", tokenSymbol)), underlyingToken_
         );
 
         // Set this contract as authorized minter for the sToken
@@ -52,10 +53,36 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Trigger rebase on the underlying sToken
+     * @dev Trigger rebase on the underlying sToken by calculating current AUM
      */
     function rebase() external {
-        underlyingToken.rebase();
+        uint256 newAUM = calculateTotalAUM();
+        underlyingToken.rebase(newAUM);
+    }
+
+    /**
+     * @dev Manual rebase with specific AUM (for testing/admin)
+     */
+    function rebaseWithAUM(uint256 newAUM) external onlyOwner {
+        underlyingToken.rebase(newAUM);
+    }
+
+    /**
+     * @dev Calculate total Assets Under Management across all pilots
+     */
+    function calculateTotalAUM() public view returns (uint256) {
+        uint256 totalAUM = 0;
+
+        //  Check actual token balance in contract
+        address underlyingTokenAddress = underlyingToken.underlyingToken();
+        totalAUM += IERC20(underlyingTokenAddress).balanceOf(address(this));
+
+        // Add assets managed by all pilots
+        for (uint256 i = 0; i < pilots.length; i++) {
+            totalAUM += IPilot(pilots[i]).getTotalValue();
+        }
+
+        return totalAUM;
     }
 
     /**
@@ -74,7 +101,8 @@ contract SuperCluster is Ownable, ReentrancyGuard {
 
         // Mint sToken to user and update assets under management
         underlyingToken.mint(msg.sender, amount);
-        underlyingToken.updateAssetsUnderManagement(underlyingToken.getTotalAssetsUnderManagement() + amount);
+        underlyingToken.updateAssetsUnderManagement(underlyingToken.totalSupply());
+        console.log("User sToken balance after mint:", underlyingToken.balanceOf(msg.sender));
 
         emit TokenDeposited(token, msg.sender, amount);
     }
@@ -93,7 +121,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
 
         // Burn sToken from user and update assets under management
         underlyingToken.burn(msg.sender, amount);
-        underlyingToken.updateAssetsUnderManagement(underlyingToken.getTotalAssetsUnderManagement() - amount);
+        underlyingToken.updateAssetsUnderManagement(underlyingToken.totalSupply());
 
         // Transfer token to user
         bool success = IERC20(token).transfer(msg.sender, amount);
@@ -110,6 +138,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         if (amount == 0) revert AmountMustBeGreaterThanZero();
         if (!supportedTokens[token]) revert TokenNotSupported();
         if (tokenBalances[token] < amount) revert InsufficientBalance();
+        console.log("User sToken balance:", underlyingToken.balanceOf(msg.sender));
         if (underlyingToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
         // Update token balance
@@ -117,7 +146,8 @@ contract SuperCluster is Ownable, ReentrancyGuard {
 
         // Burn sToken from user and update assets under management
         underlyingToken.burn(msg.sender, amount);
-        underlyingToken.updateAssetsUnderManagement(underlyingToken.getTotalAssetsUnderManagement() - amount);
+        bool status = IERC20(token).transfer(pilot, amount);
+        require(status, "Transfer failed");
 
         emit PilotSelected(pilot, token, amount);
     }
@@ -132,10 +162,13 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     /**
      * @dev Register a new pilot (only owner)
      */
-    function registerPilot(address pilot) external onlyOwner {
-        if (registeredPilots[pilot]) revert PilotAlreadyRegistered();
+    function registerPilot(address pilot, address acceptedToken) external onlyOwner {
+        require(!registeredPilots[pilot], "Pilot already registered");
+
         registeredPilots[pilot] = true;
         pilots.push(pilot);
+        supportedTokens[acceptedToken] = true;
+
         emit PilotRegistered(pilot);
     }
 }

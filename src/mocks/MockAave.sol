@@ -55,7 +55,7 @@ contract LendingPool is ReentrancyGuard {
     }
 
     function supply(uint256 amount) external nonReentrant {
-        _accrueInterest();
+        _accureInterest();
         if (amount == 0) revert ZeroAmount();
         IERC20(debtToken).safeTransferFrom(msg.sender, address(this), amount);
 
@@ -74,7 +74,7 @@ contract LendingPool is ReentrancyGuard {
     }
 
     function borrow(uint256 amount) external nonReentrant {
-        _accrueInterest();
+        _accureInterest();
 
         uint256 shares = 0;
         if (totalBorrowShares == 0) {
@@ -98,7 +98,7 @@ contract LendingPool is ReentrancyGuard {
     function repay(uint256 shares) external nonReentrant {
         if (shares == 0) revert ZeroAmount();
 
-        _accrueInterest();
+        _accureInterest();
 
         uint256 borrowAmount = (shares * totalBorrowAssets) / totalBorrowShares;
 
@@ -112,10 +112,10 @@ contract LendingPool is ReentrancyGuard {
     }
 
     function accureInterest() external nonReentrant {
-        _accrueInterest();
+        _accureInterest();
     }
 
-    function _accrueInterest() internal {
+    function _accureInterest() internal {
         uint256 interestPerYear = totalBorrowAssets * borrowRate / 1e18;
         // 1000 * 1e17 / 1e18 = 100/year
 
@@ -133,7 +133,7 @@ contract LendingPool is ReentrancyGuard {
     function supplyCollateral(uint256 amount) external nonReentrant {
         if (amount == 0) revert ZeroAmount();
 
-        _accrueInterest();
+        _accureInterest();
 
         IERC20(collateralToken).safeTransferFrom(msg.sender, address(this), amount);
 
@@ -146,7 +146,7 @@ contract LendingPool is ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
         if (amount > userCollaterals[msg.sender]) revert InsufficientCollateral();
 
-        _accrueInterest();
+        _accureInterest();
 
         userCollaterals[msg.sender] -= amount;
 
@@ -175,7 +175,7 @@ contract LendingPool is ReentrancyGuard {
 
         if (shares > userSupplyShares[msg.sender]) revert InsufficientShares();
 
-        _accrueInterest();
+        _accureInterest();
 
         uint256 amount = (shares * totalSupplyAssets) / totalSupplyShares;
 
@@ -199,5 +199,67 @@ contract LendingPool is ReentrancyGuard {
         if (!success) revert FlashLoanFailed(token, amount);
 
         IERC20(token).safeTransfer(address(this), amount);
+    }
+
+    /**
+     * @dev ✅ ADD: Get user's supply shares (raw shares, not converted to assets)
+     * @param user The user address to check
+     * @return The amount of supply shares the user holds
+     */
+    function getUserSupplyShares(address user) external view returns (uint256) {
+        return userSupplyShares[user];
+    }
+
+    function getUserSupplyBalance(address user) external view returns (uint256) {
+        if (totalSupplyShares == 0) return 0;
+
+        // Convert user shares to assets using exchange rate
+        // assets = (userShares * totalSupplyAssets) / totalSupplyShares
+        return (userSupplyShares[user] * totalSupplyAssets) / totalSupplyShares;
+    }
+
+    function getUserBorrowShares(address user) external view returns (uint256) {
+        return userBorrowShares[user];
+    }
+
+    function getUserBorrowBalance(address user) external view returns (uint256) {
+        if (totalBorrowShares == 0) return 0;
+
+        // Convert user borrow shares to assets
+        return (userBorrowShares[user] * totalBorrowAssets) / totalBorrowShares;
+    }
+
+    function getUserAccountData(address user)
+        external
+        view
+        returns (
+            uint256 supplyBalance,
+            uint256 supplyShares,
+            uint256 borrowBalance,
+            uint256 borrowShares,
+            uint256 healthFactor
+        )
+    {
+        supplyShares = userSupplyShares[user];
+        borrowShares = userBorrowShares[user];
+
+        // Convert to asset values
+        if (totalSupplyShares > 0) {
+            supplyBalance = (supplyShares * totalSupplyAssets) / totalSupplyShares;
+        }
+
+        if (totalBorrowShares > 0) {
+            borrowBalance = (borrowShares * totalBorrowAssets) / totalBorrowShares;
+        }
+
+        // Calculate health factor
+        if (borrowBalance == 0) {
+            healthFactor = type(uint256).max; // No debt = infinite health
+        } else {
+            // Health factor = (collateral * LTV) / debt
+            // Using LTV from constructor
+            uint256 collateralValue = (supplyBalance * ltv) / 1e18;
+            healthFactor = (collateralValue * 1e18) / borrowBalance;
+        }
     }
 }
