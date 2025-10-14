@@ -1,10 +1,19 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-abstract contract BaseToken {
-    function name() external view virtual returns (string memory);
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 
-    function symbol() external view virtual returns (string memory);
+/// @title BaseToken - Simple ERC20 used as the underlying asset for staking
+contract BaseToken is ERC20 {
+    address public owner;
 
-    function decimals() external view virtual returns (uint8);
+    constructor(string memory name_, string memory symbol_, uint8 /*decimals_*/) ERC20(name_, symbol_) {
+        owner = msg.sender;
+    }
+
+    /// @notice Mint tokens to any address (for testing)
+    function mint(address to, uint256 amount) external {
+        require(msg.sender == owner, "Not owner");
+        _mint(to, amount);
+    }
 }

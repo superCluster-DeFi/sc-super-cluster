@@ -42,7 +42,10 @@ contract SuperCluster is Ownable, ReentrancyGuard {
 
         // Deploy sToken with dynamic name and symbol
         underlyingToken = new SToken(
-            string(abi.encodePacked("s", tokenName)), string(abi.encodePacked("s", tokenSymbol)), underlyingToken_
+            string(abi.encodePacked("s", tokenName)),
+            string(abi.encodePacked("s", tokenSymbol)),
+            underlyingToken_,
+            underlyingToken_
         );
 
         // Set this contract as authorized minter for the sToken

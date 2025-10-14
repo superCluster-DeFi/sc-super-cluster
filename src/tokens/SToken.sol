@@ -3,6 +3,8 @@ pragma solidity ^0.8.13;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {console} from "forge-std/console.sol";
 
@@ -14,6 +16,13 @@ contract SToken is IERC20, IERC20Metadata, Ownable {
     uint256 public lastRebaseTime;
     uint256 public rebaseInterval = 1 days;
     uint256 public totalAssetsUnderManagement;
+
+
+    using SafeERC20 for IERC20;
+
+    IERC20 public immutable baseToken;
+
+   
 
     // Mapping of share balances (tidak berubah saat rebase)
     mapping(address => uint256) private _shareBalances;
@@ -31,12 +40,13 @@ contract SToken is IERC20, IERC20Metadata, Ownable {
         _;
     }
 
-    constructor(string memory _name, string memory _symbol, address _underlyingToken) Ownable(msg.sender) {
+    constructor(string memory _name, string memory _symbol, address _underlyingToken, address _baseToken) Ownable(msg.sender) {
         name = _name;
         symbol = _symbol;
         underlyingToken = _underlyingToken;
         decimals = IERC20Metadata(_underlyingToken).decimals();
-
+        baseToken = IERC20(_baseToken);
+    
         lastRebaseTime = block.timestamp;
     }
 
@@ -137,6 +147,22 @@ contract SToken is IERC20, IERC20Metadata, Ownable {
         emit Transfer(from, address(0), amount);
     }
 
+    function _mintShares(address to, uint256 amount) internal {
+        uint256 shares;
+        if (_totalShares == 0) {
+            shares = amount; // 1:1 ratio at start
+        } else {
+            shares = (amount * _totalShares) / totalAssetsUnderManagement;
+        }
+
+        _shareBalances[to] += shares;
+        _totalShares += shares;
+        totalAssetsUnderManagement += amount;
+
+        emit Transfer(address(0), to, amount);
+    }
+
+
     function setAuthorizedMinter(address minter, bool authorized) external onlyOwner {
         authorizedMinters[minter] = authorized;
     }
@@ -152,6 +178,16 @@ contract SToken is IERC20, IERC20Metadata, Ownable {
 
     function getTotalAssetsUnderManagement() external view returns (uint256) {
         return totalAssetsUnderManagement;
+    }
+
+   function stake(uint256 amount) external {
+        require(amount > 0, "Zero stake");
+        baseToken.safeTransferFrom(msg.sender, address(this), amount);
+        _mintShares(msg.sender, amount);
+    }
+
+    function totalBase() external view returns (uint256) {
+        return baseToken.balanceOf(address(this));
     }
 
     function rebase(uint256 newAUM) external canRebase {
