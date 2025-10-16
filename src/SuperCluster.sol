@@ -148,9 +148,6 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         if (tokenBalances[token] < amount) revert InsufficientBalance();
         if (underlyingToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
-        // require withdrawManager to be set
-        if (address(withdrawManager) == address(0)) revert TransferFailed();
-
         // Update token balance
         tokenBalances[token] -= amount;
 
@@ -159,9 +156,11 @@ contract SuperCluster is Ownable, ReentrancyGuard {
 
         // Update AUM after burn
         underlyingToken.updateAssetsUnderManagement(underlyingToken.totalSupply());
-
-        // Notify withdraw manager once (it will create request)
         withdrawManager.autoRequest(msg.sender, amount);
+
+        // Transfer token to usercanRebase
+        bool success = IERC20(token).transfer(msg.sender, amount);
+        require(success, "Transfer failed");
 
         emit TokenWithdrawn(token, msg.sender, amount);
     }

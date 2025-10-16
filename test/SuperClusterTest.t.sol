@@ -49,6 +49,7 @@ contract SuperClusterTest is Test {
         wsToken = superCluster.wsToken();
 
         Withdraw withdrawManager = new Withdraw(address(sToken), address(idrx), address(superCluster), 1 days);
+        superCluster.setWithdrawManager(address(withdrawManager));
 
         //Deploy Mock protocols
         _deployMockProtocols();
@@ -168,6 +169,9 @@ contract SuperClusterTest is Test {
         vm.startPrank(user1);
         idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
         superCluster.deposit(address(idrx), DEPOSIT_AMOUNT);
+
+        // APPROVE
+        sToken.approve(address(superCluster), DEPOSIT_AMOUNT);
 
         uint256 idrxBalanceBefore = idrx.balanceOf(user1);
         uint256 sTokenBalanceBefore = sToken.balanceOf(user1);

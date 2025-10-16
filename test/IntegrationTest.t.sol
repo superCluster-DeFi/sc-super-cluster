@@ -157,6 +157,11 @@ contract IntegrationTest is SuperClusterTest {
         pilot.setPilotStrategy(adapters, allocations);
 
         (address[] memory newAdapters, uint256[] memory newAllocations) = pilot.getStrategy();
+
+        assertEq(newAdapters.length, 2);
+        assertEq(newAllocations.length, 2);
+        assertEq(newAdapters[0], address(aaveAdapter));
+        assertEq(newAdapters[1], address(morphoAdapter));
         assertEq(newAllocations[0], 5000);
         assertEq(newAllocations[1], 5000);
 
