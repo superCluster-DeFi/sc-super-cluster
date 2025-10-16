@@ -21,93 +21,129 @@ contract WsTokenTest is Test {
         user1 = makeAddr("user1");
         user2 = makeAddr("user2");
 
-        // 1. Deploy BaseToken (e.g. underlying token)
+        // 1. Deploy BaseToken (underlying)
         base = new BaseToken("Base Token", "BASE", 18);
 
-        // 2. Deploy SToken (rebasing staking token)
+        // 2. Deploy SToken (rebasing)
         sToken = new SToken("Staked Token", "sTOKEN", address(base), address(base));
 
-        // 3. Deploy WsToken (wrapped non-rebasing)
+        // 3. Deploy WsToken (non-rebasing)
         wsToken = new WsToken(address(sToken));
 
-        // 4. Mint BaseToken to user
+        // 4. Mint base to users
         base.mint(user1, 1_000 ether);
         base.mint(user2, 1_000 ether);
 
-        // 5. Approve sToken for staking
-        vm.startPrank(user1);
-        base.approve(address(sToken), type(uint256).max);
-
-        vm.stopPrank();
-
-        // 6. Stake 100 base tokens
+        // 5. Give minting rights to user1 for simplicity
         sToken.setAuthorizedMinter(user1, true);
+        sToken.setAuthorizedMinter(address(this), true);
+
+        sToken.mint(address(this), 1e18);
+        sToken.updateAssetsUnderManagement(2e18);
+        vm.warp(block.timestamp + 1 days);
+        sToken.rebase(1e18);
     }
 
     function testWrapAndUnwrapFlow() public {
         vm.startPrank(user1);
 
-        // Stake 100 base tokens -> get 100 sToken
-        sToken.stake(100 ether);
-        assertEq(sToken.balanceOf(user1), 100 ether, "Initial sToken mint failed");
+        // Mint 100 sToken to user1 (simulating stake)
+        sToken.mint(user1, 100 ether);
+        assertEq(sToken.balanceOf(user1), 100 ether, "Mint failed");
 
-        // Approve wsToken to wrap
+        // Approve WsToken to spend sToken
         sToken.approve(address(wsToken), type(uint256).max);
 
-        // Wrap 100 sToken -> get 100 wsToken (1:1)
+        // Wrap 100 sToken -> expect 100 wsToken (first time = 1:1)
         wsToken.wrap(100 ether);
         assertEq(wsToken.balanceOf(user1), 100 ether, "Initial wrap failed");
+        assertEq(sToken.balanceOf(address(wsToken)), 100 ether, "Contract sToken balance mismatch");
 
-        // After wrapping, sToken inside wsToken contract should be 100
-        assertEq(sToken.balanceOf(address(wsToken)), 100 ether, "Contract STOKEN balance mismatch");
-
-        // Simulate time passing to allow rebase
+        // Simulate time passing + rebase (+10%)
         vm.warp(block.timestamp + 1 days);
+        sToken.rebase(110 ether); // increase total underlying
 
-        // Simulate rebase (increase sToken supply by +10%)
-        sToken.rebase(110 ether); // total up by 10%
-
-        // Check the exchange rate
+        // wsToken rate must increase
         uint256 rate = wsToken.stTokenPerWsToken();
-        assertGt(rate, 1e18, "Rate should increase after rebase");
+        assertApproxEqRel(rate, 1.1e18, 0.001e18, "Rate should reflect rebase");
 
-        // Unwrap all wsToken -> should get more sToken (110)
-        uint256 beforeSToken = sToken.balanceOf(user1);
+        // Unwrap: user burns 100 wsToken, receives 110 sToken
+        uint256 beforeBalance = sToken.balanceOf(user1);
         wsToken.unwrap(100 ether);
-        uint256 afterSToken = sToken.balanceOf(user1);
+        uint256 afterBalance = sToken.balanceOf(user1);
+        uint256 received = afterBalance - beforeBalance;
 
-        uint256 received = afterSToken - beforeSToken;
-        assertEq(received, 110 ether, "Unwrap should yield rebased amount");
+        assertEq(received, 110 ether, "Unwrap yield mismatch");
+        assertEq(wsToken.balanceOf(user1), 0, "User wsToken should be 0");
 
+        vm.warp(block.timestamp + 1 days);
+        sToken.rebase(1e18);
         vm.stopPrank();
     }
 
     function testUnwrapToRecipient() public {
         vm.startPrank(user1);
-        vm.warp(block.timestamp + 1 days);
 
-        // Stake and wrap
-        sToken.stake(50 ether);
+        // Mint + approve
+        sToken.mint(user1, 50 ether);
         sToken.approve(address(wsToken), type(uint256).max);
-        wsToken.wrap(50 ether);
 
-        // Rebase to +20%
+        // Wrap
+        wsToken.wrap(50 ether);
+        assertEq(wsToken.balanceOf(user1), 50 ether, "Wrap failed");
+
+        // Simulate +20% rebase
         sToken.rebase(60 ether);
 
-        // Unwrap to user2
+        // Unwrap to another user
         wsToken.unwrapTo(50 ether, user2);
         assertEq(sToken.balanceOf(user2), 60 ether, "Recipient unwrap mismatch");
+        assertEq(wsToken.balanceOf(user1), 0, "Sender wsToken should be burned");
 
+        vm.warp(block.timestamp + 1 days);
+        sToken.rebase(1e18);
+        vm.stopPrank();
+    }
+
+    function testRateAndConversionFunctions() public {
+        vm.startPrank(user1);
+
+        sToken.mint(user1, 100 ether);
+        sToken.approve(address(wsToken), type(uint256).max);
+        wsToken.wrap(100 ether);
+
+        vm.warp(block.timestamp + 1 days);
+
+        // Initial conversion rates (1:1)
+        assertEq(wsToken.stTokenPerWsToken(), 1e18);
+        assertEq(wsToken.wsTokenPerStToken(), 1e18);
+
+        // Rebase by +50%
+        sToken.rebase(150 ether);
+
+        // New conversion rates
+        uint256 stPerWs = wsToken.stTokenPerWsToken();
+        uint256 wsPerSt = wsToken.wsTokenPerStToken();
+
+        assertApproxEqRel(stPerWs, 1.5e18, 0.001e18, "st/ws mismatch");
+        assertApproxEqRel(wsPerSt, 0.6666e18, 0.001e18, "ws/st mismatch");
+
+        vm.warp(block.timestamp + 1 days);
+        sToken.rebase(1e18);
         vm.stopPrank();
     }
 
     function testCannotWrapZeroAmount() public {
         vm.expectRevert(bytes("Amount must be > 0"));
         wsToken.wrap(0);
+        vm.warp(block.timestamp + 1 days);
+        sToken.rebase(1e18);
     }
 
     function testCannotUnwrapWithoutBalance() public {
         vm.expectRevert(bytes("Insufficient wsToken balance"));
         wsToken.unwrap(1 ether);
+        vm.warp(block.timestamp + 1 days);
+        sToken.rebase(1e18);
     }
 }

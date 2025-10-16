@@ -5,6 +5,7 @@ import "forge-std/Test.sol";
 import "forge-std/console.sol";
 import {SuperCluster} from "../src/SuperCluster.sol";
 import {SToken} from "../src/tokens/SToken.sol";
+import {WsToken} from "../src/tokens/WsToken.sol";
 import {Pilot} from "../src/pilot/Pilot.sol";
 import {AaveAdapter} from "../src/adapter/AaveAdapter.sol";
 import {MorphoAdapter} from "../src/adapter/MorphoAdapter.sol";
@@ -12,10 +13,12 @@ import {LendingPool} from "../src/mocks/MockAave.sol";
 import {MockMorpho} from "../src/mocks/MockMorpho.sol";
 import {MockIDRX} from "../src/mocks/tokens/MockIDRX.sol";
 import {Id, MarketParams} from "../src/mocks/interfaces/IMorpho.sol";
+import {Withdraw} from "../src/tokens/WithDraw.sol";
 
 contract SuperClusterTest is Test {
     SuperCluster public superCluster;
     SToken public sToken;
+    WsToken public wsToken;
     MockIDRX public idrx;
     Pilot public pilot;
     AaveAdapter public aaveAdapter;
@@ -35,34 +38,37 @@ contract SuperClusterTest is Test {
         user1 = makeAddr("user1");
         user2 = makeAddr("user2");
 
-        // Deploy IDRX token
         idrx = new MockIDRX();
         idrx.mint(owner, INITIAL_SUPPLY);
         idrx.mint(user1, INITIAL_SUPPLY);
         idrx.mint(user2, INITIAL_SUPPLY);
 
-        deal(user1, 100 ether);
-        deal(user2, 100 ether);
-        deal(owner, 100 ether);
+        superCluster = new SuperCluster(address(idrx), address(0));
 
-        // Deploy SuperCluster
-        superCluster = new SuperCluster(address(idrx));
         sToken = superCluster.underlyingToken();
+        wsToken = superCluster.wsToken();
 
-        // Deploy Mock Protocols
+        Withdraw withdrawManager = new Withdraw(address(sToken), address(idrx), address(superCluster), 1 days);
+
+        //Deploy Mock protocols
         _deployMockProtocols();
 
-        // Deploy Adapters
+        // Deploy adapters
         _deployAdapters();
 
-        // Deploy Pilot
+        // Deploy pilot
         _deployPilot();
 
-        // Setup Pilot Strategy
+        // Setup pilot strategy
         _setupPilotStrategy();
 
-        // Register Pilot in SuperCluster
+        // Register pilot
         superCluster.registerPilot(address(pilot), address(idrx));
+
+        // (Opsional) log untuk debugging
+        console.log("SuperCluster:", address(superCluster));
+        console.log("SToken:", address(sToken));
+        console.log("Withdraw:", address(withdrawManager));
     }
 
     function _deployMockProtocols() internal {
@@ -131,9 +137,11 @@ contract SuperClusterTest is Test {
 
     // ==================== SUPERCLUSTER TESTS ====================
 
-    function test_SuperCluster_Deploy() public {
+    function test_SuperCluster_Deploy() public view {
         assertEq(sToken.name(), "sMockIDRX");
+        assertEq(wsToken.name(), "Wrapped sIDRX");
         assertEq(sToken.symbol(), "sIDRX");
+        assertEq(wsToken.symbol(), "wsIDRX");
         assertTrue(superCluster.supportedTokens(address(idrx)));
         assertEq(superCluster.owner(), owner);
     }
@@ -169,6 +177,8 @@ contract SuperClusterTest is Test {
 
         uint256 idrxBalanceAfter = idrx.balanceOf(user1);
         uint256 sTokenBalanceAfter = sToken.balanceOf(user1);
+
+        console.log("Requested withdraw amount:", DEPOSIT_AMOUNT);
 
         assertEq(idrxBalanceAfter - idrxBalanceBefore, DEPOSIT_AMOUNT);
         assertEq(sTokenBalanceBefore - sTokenBalanceAfter, DEPOSIT_AMOUNT);
@@ -242,7 +252,7 @@ contract SuperClusterTest is Test {
 
     // ==================== STOKEN TESTS ====================
 
-    function test_SToken_InitialState() public {
+    function test_SToken_InitialState() public view {
         assertEq(sToken.name(), "sMockIDRX");
         assertEq(sToken.symbol(), "sIDRX");
         assertEq(sToken.decimals(), 18);
@@ -257,7 +267,7 @@ contract SuperClusterTest is Test {
 
     // ==================== PILOT TESTS ====================
 
-    function test_Pilot_InitialState() public {
+    function test_Pilot_InitialState() public view {
         assertEq(pilot.name(), "Conservative DeFi Pilot");
         assertTrue(bytes(pilot.description()).length > 0);
         assertEq(pilot.TOKEN(), address(idrx));
@@ -321,7 +331,7 @@ contract SuperClusterTest is Test {
 
     // ==================== AAVE ADAPTER TESTS ====================
 
-    function test_AaveAdapter_InitialState() public {
+    function test_AaveAdapter_InitialState() public view {
         assertEq(aaveAdapter.getProtocolName(), "Aave V3");
         assertEq(aaveAdapter.getPilotStrategy(), "Conservative Lending");
         assertEq(address(aaveAdapter.LENDINGPOOL()), address(mockAave));
@@ -358,7 +368,7 @@ contract SuperClusterTest is Test {
         assertGt(balanceAfter, balanceBefore);
     }
 
-    function test_AaveAdapter_ConvertToShares() public {
+    function test_AaveAdapter_ConvertToShares() public view {
         uint256 assets = 1000e18;
         uint256 shares = aaveAdapter.convertToShares(assets);
 
@@ -380,7 +390,7 @@ contract SuperClusterTest is Test {
 
     // ==================== MORPHO ADAPTER TESTS ====================
 
-    function test_MorphoAdapter_InitialState() public {
+    function test_MorphoAdapter_InitialState() public view {
         assertEq(morphoAdapter.getProtocolName(), "Morpho Blue");
         assertEq(morphoAdapter.getPilotStrategy(), "High Yield Lending");
         assertTrue(morphoAdapter.isActive());

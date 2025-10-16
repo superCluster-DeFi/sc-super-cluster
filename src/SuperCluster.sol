@@ -7,13 +7,19 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SToken} from "./tokens/SToken.sol";
 import {IPilot} from "./interfaces/IPilot.sol";
-
 import {console} from "forge-std/console.sol";
+import {WsToken} from "./tokens/WsToken.sol";
+import {Withdraw} from "./tokens/WithDraw.sol";
 
 contract SuperCluster is Ownable, ReentrancyGuard {
     SToken public underlyingToken; // SToken token (rebasing)
     mapping(address => bool) public supportedTokens;
     mapping(address => uint256) public tokenBalances;
+
+    WsToken public wsToken; // Wrapped SToken (non-rebasing)
+
+    // Withdraw manager
+    Withdraw public withdrawManager;
 
     // Pilot management
     mapping(address => bool) public registeredPilots;
@@ -34,11 +40,12 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     error TokenNotSupported();
     error AmountMustBeGreaterThanZero();
 
-    constructor(address underlyingToken_) Ownable(msg.sender) {
+    constructor(address underlyingToken_, address withdrawManager_) Ownable(msg.sender) {
         // Get token metadata from the underlying token
         IERC20Metadata tokenMetadata = IERC20Metadata(underlyingToken_);
         string memory tokenName = tokenMetadata.name();
         string memory tokenSymbol = tokenMetadata.symbol();
+        withdrawManager = Withdraw(withdrawManager_);
 
         // Deploy sToken with dynamic name and symbol
         underlyingToken = new SToken(
@@ -48,11 +55,33 @@ contract SuperCluster is Ownable, ReentrancyGuard {
             underlyingToken_
         );
 
+        // Deploy wsToken (wrapped sToken)
+        wsToken = new WsToken(address(underlyingToken));
+
         // Set this contract as authorized minter for the sToken
         underlyingToken.setAuthorizedMinter(address(this), true);
 
         // Add supported tokens
         supportedTokens[underlyingToken_] = true;
+    }
+
+    /**
+     * @dev Trigger WsToken wrap for user (internal)
+     */
+    function autoWrap(address user, uint256 sAmount) internal {
+        uint256 beforeBalance = wsToken.balanceOf(address(this));
+
+        IERC20(address(underlyingToken)).approve(address(wsToken), sAmount);
+
+        wsToken.wrap(sAmount);
+
+        uint256 afterBalance = wsToken.balanceOf(address(this));
+        uint256 minted = afterBalance - beforeBalance; // Calculate minted wsToken
+
+        wsToken.transfer(user, minted);
+
+        console.log("AutoWrap: minted wsToken =", minted);
+        console.log("User wsToken balance =", wsToken.balanceOf(user));
     }
 
     /**
@@ -119,16 +148,20 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         if (tokenBalances[token] < amount) revert InsufficientBalance();
         if (underlyingToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
+        // require withdrawManager to be set
+        if (address(withdrawManager) == address(0)) revert TransferFailed();
+
         // Update token balance
         tokenBalances[token] -= amount;
 
-        // Burn sToken from user and update assets under management
+        // Burn user's sToken (SuperCluster authorized as minter/burner)
         underlyingToken.burn(msg.sender, amount);
+
+        // Update AUM after burn
         underlyingToken.updateAssetsUnderManagement(underlyingToken.totalSupply());
 
-        // Transfer token to user
-        bool success = IERC20(token).transfer(msg.sender, amount);
-        require(success, "Transfer failed");
+        // Notify withdraw manager once (it will create request)
+        withdrawManager.autoRequest(msg.sender, amount);
 
         emit TokenWithdrawn(token, msg.sender, amount);
     }
@@ -173,5 +206,10 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         supportedTokens[acceptedToken] = true;
 
         emit PilotRegistered(pilot);
+    }
+
+    function setWithdrawManager(address _manager) external onlyOwner {
+        require(_manager != address(0), "Zero manager");
+        withdrawManager = Withdraw(_manager);
     }
 }

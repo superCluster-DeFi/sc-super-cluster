@@ -31,12 +31,14 @@ contract WsToken is ERC20 {
     /**
      * @param _sToken address of the rebasing token (e.g. sToken / stETH)
      */
-    constructor(address _sToken) ERC20(
+    constructor(address _sToken)
         // name: "Wrapped <symbol>" (kept short)
-        string(abi.encodePacked("Wrapped ", IERC20Metadata(_sToken).symbol())),
-        // symbol: "w<symbol>" (like wstETH)
-        string(abi.encodePacked("w", IERC20Metadata(_sToken).symbol()))
-    ) {
+        ERC20(
+            string(abi.encodePacked("Wrapped ", IERC20Metadata(_sToken).symbol())),
+            // symbol: "w<symbol>" (like wstETH)
+            string(abi.encodePacked("w", IERC20Metadata(_sToken).symbol()))
+        )
+    {
         require(_sToken != address(0), "sToken address zero");
         STOKEN = _sToken;
         STOKENCONTRACT = IERC20(_sToken);
@@ -51,7 +53,7 @@ contract WsToken is ERC20 {
     function wrap(uint256 sTokenAmount) external {
         require(sTokenAmount > 0, "Amount must be > 0");
 
-        // Get current STOKEN balance held by this contract (includes rebases)
+        // Get current STOKEN balance held by this contract (includes rebases) same underlying token
         uint256 stTokenBalance = STOKENCONTRACT.balanceOf(address(this));
         uint256 _totalSupply = totalSupply();
 
