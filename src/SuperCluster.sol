@@ -24,6 +24,9 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     mapping(address => bool) public registeredPilots;
     address[] public pilots;
 
+    mapping(address => string) public userStrategy;
+    mapping(string => address) public strategyToPilot;
+
     // Events
     event PilotRegistered(address indexed pilot);
     event TokenDeposited(address indexed token, address indexed user, uint256 amount);
@@ -39,30 +42,42 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     error TokenNotSupported();
     error AmountMustBeGreaterThanZero();
 
-    constructor(address underlyingToken_) Ownable(msg.sender) {
-        // Get token metadata from the underlying token
-        IERC20Metadata tokenMetadata = IERC20Metadata(underlyingToken_);
-        string memory tokenName = tokenMetadata.name();
-        string memory tokenSymbol = tokenMetadata.symbol();
+    constructor(address underlyingToken_, address sTokenAddr, address wsTokenAddr, address withdrawManagerAddr)
+        Ownable(msg.sender)
+    {
+        // Use pre-deployed token & manager addresses to avoid embedding large initcode
+        sToken = SToken(sTokenAddr);
+        wsToken = WsToken(wsTokenAddr);
+        withdrawManager = Withdraw(withdrawManagerAddr);
 
-        // Deploy sToken with dynamic name and symbol
-        sToken = new SToken(
-            string(abi.encodePacked("s", tokenName)), string(abi.encodePacked("s", tokenSymbol)), underlyingToken_
-        );
-
-        // Deploy wsToken (wrapped sToken)
-        wsToken = new WsToken(
-            string(abi.encodePacked("ws", tokenName)), string(abi.encodePacked("ws", tokenSymbol)), underlyingToken_
-        );
-
-        withdrawManager = new Withdraw(address(sToken), address(wsToken), address(this), 4 days);
-
-        // Set this contract as authorized minter for the sToken
-        sToken.setAuthorizedMinter(address(this), true);
-        wsToken.setAuthorizedMinter(address(this), true);
-
-        // Add supported tokens
+        // Register supported underlying token
         supportedTokens[underlyingToken_] = true;
+    }
+
+    function registerStrategy(string calldata strategy, address pilot) external onlyOwner {
+        require(pilot != address(0), "Zero pilot address");
+        strategyToPilot[strategy] = pilot;
+    }
+
+    function selectStrategy(string calldata strategy) external {
+        require(strategyToPilot[strategy] != address(0), "Strategy not registered");
+        address oldPilot = strategyToPilot[userStrategy[msg.sender]];
+        address newPilot = strategyToPilot[strategy];
+
+        // If user has funds and is changing pilots, move them
+        if (oldPilot != address(0) && oldPilot != newPilot) {
+            uint256 pilotBalance = IERC20(address(sToken)).balanceOf(msg.sender);
+            if (pilotBalance > 0) {
+                // Redeem from old pilot
+                uint256 redeemed = IPilot(oldPilot).redeem(pilotBalance);
+
+                // Invest in new pilot
+                IERC20(address(sToken)).approve(newPilot, redeemed);
+                IPilot(newPilot).receiveAndInvest(redeemed);
+            }
+        }
+
+        userStrategy[msg.sender] = strategy;
     }
 
     /**
@@ -117,19 +132,22 @@ contract SuperCluster is Ownable, ReentrancyGuard {
      * @dev Universal deposit function for any supported token
      */
     function deposit(address token, uint256 amount) external {
+        require(bytes(userStrategy[msg.sender]).length > 0, "Strategy not selected");
         if (amount == 0) revert AmountMustBeGreaterThanZero();
         if (!supportedTokens[token]) revert TokenNotSupported();
 
-        // Transfer token from user to this contract
+        address pilotAddress = strategyToPilot[userStrategy[msg.sender]];
+        require(pilotAddress != address(0), "Pilot not found");
+
         bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
         require(success, "Transfer failed");
 
-        // Update token balance
-        tokenBalances[token] += amount;
-
-        // Mint sToken to user and update assets under management
+        // Keep funds in SuperCluster until user selects a pilot
         sToken.mint(msg.sender, amount);
         sToken.updateAssetsUnderManagement(sToken.totalSupply());
+
+        // Update internal accounting of deposited base tokens
+        tokenBalances[token] += amount;
 
         emit TokenDeposited(token, msg.sender, amount);
     }
@@ -137,25 +155,22 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     /**
      * @dev Universal withdraw function for any supported token
      */
-    function withdraw(address token, uint256 amount) external {
+    function withdraw(address token, uint256 amount) external nonReentrant {
         if (amount == 0) revert AmountMustBeGreaterThanZero();
         if (!supportedTokens[token]) revert TokenNotSupported();
-        if (tokenBalances[token] < amount) revert InsufficientBalance();
         if (sToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
-        // require withdrawManager to be set
-        if (address(withdrawManager) == address(0)) revert TransferFailed();
-
-        // Update token balance
-        tokenBalances[token] -= amount;
-
-        // Burn user's sToken (SuperCluster authorized as minter/burner)
+        // 1. Burn sToken from user
         sToken.burn(msg.sender, amount);
 
-        // Update AUM after burn
+        // 2. Mint equivalent sToken to the Withdraw manager (so it holds the sToken)
+        require(address(withdrawManager) != address(0), "Withdraw manager not set");
+        sToken.mint(address(withdrawManager), amount);
+
+        // 3. Update AUM after mint/burn
         sToken.updateAssetsUnderManagement(sToken.totalSupply());
 
-        // Notify withdraw manager once (it will create request)
+        // 4. Notify withdraw manager to create a request
         withdrawManager.autoRequest(msg.sender, amount);
 
         emit TokenWithdrawn(token, msg.sender, amount);

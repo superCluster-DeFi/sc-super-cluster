@@ -94,6 +94,7 @@ contract Withdraw is Ownable {
         require(msg.sender == superCluster, "Only SuperCluster");
         require(sAmount > 0, "Zero amount");
 
+        // Don't need to transfer sToken since SuperCluster already burned it
         uint256 id = nextRequestId++;
         Request storage r = requests[id];
         r.user = user;
@@ -145,7 +146,10 @@ contract Withdraw is Ownable {
         require(!r.claimed, "Already claimed");
         require(baseAmount > 0, "Zero base amount");
 
-        // Basic safety: ensure contract has enough base tokens to cover
+        // Verify we have the sTokens
+        require(IERC20(address(sToken)).balanceOf(address(this)) >= r.sAmount, "No sTokens held");
+
+        // Verify we have the base tokens for withdrawal
         require(baseToken.balanceOf(address(this)) >= baseAmount, "Insufficient base funds");
 
         r.baseAmount = baseAmount;
@@ -197,13 +201,14 @@ contract Withdraw is Ownable {
         // mark claimed before external transfer to avoid reentrancy
         r.claimed = true;
 
-        // Burn held sToken to update SToken state (requires this contract to be authorized minter)
-        // If burn call fails (not authorized), we still proceed but sTokens remain in this contract;
-        // it's recommended to set this contract as authorized minter on SToken so burn reduces total AUM.
-        try ISToken(address(sToken)).burn(address(this), r.sAmount) {
-            // burned successfully
-        } catch {
-            // ignore: fallback to not burning if not allowed
+        // For autoRequest from SuperCluster, sToken is already burned
+        // Only try to burn if this contract actually holds the sToken (from manual requests)
+        if (IERC20(address(sToken)).balanceOf(address(this)) >= r.sAmount) {
+            try ISToken(address(sToken)).burn(address(this), r.sAmount) {
+                // burned successfully
+            } catch {
+                // ignore: fallback to not burning if not allowed
+            }
         }
 
         // Transfer base token to user
