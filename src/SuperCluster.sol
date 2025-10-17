@@ -7,12 +7,11 @@ import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {SToken} from "./tokens/SToken.sol";
 import {IPilot} from "./interfaces/IPilot.sol";
-import {console} from "forge-std/console.sol";
 import {WsToken} from "./tokens/WsToken.sol";
 import {Withdraw} from "./tokens/WithDraw.sol";
 
 contract SuperCluster is Ownable, ReentrancyGuard {
-    SToken public underlyingToken; // SToken token (rebasing)
+    SToken public sToken; // SToken token (rebasing)
     mapping(address => bool) public supportedTokens;
     mapping(address => uint256) public tokenBalances;
 
@@ -40,26 +39,27 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     error TokenNotSupported();
     error AmountMustBeGreaterThanZero();
 
-    constructor(address underlyingToken_, address withdrawManager_) Ownable(msg.sender) {
+    constructor(address underlyingToken_) Ownable(msg.sender) {
         // Get token metadata from the underlying token
         IERC20Metadata tokenMetadata = IERC20Metadata(underlyingToken_);
         string memory tokenName = tokenMetadata.name();
         string memory tokenSymbol = tokenMetadata.symbol();
-        withdrawManager = Withdraw(withdrawManager_);
 
         // Deploy sToken with dynamic name and symbol
-        underlyingToken = new SToken(
-            string(abi.encodePacked("s", tokenName)),
-            string(abi.encodePacked("s", tokenSymbol)),
-            underlyingToken_,
-            underlyingToken_
+        sToken = new SToken(
+            string(abi.encodePacked("s", tokenName)), string(abi.encodePacked("s", tokenSymbol)), underlyingToken_
         );
 
         // Deploy wsToken (wrapped sToken)
-        wsToken = new WsToken(address(underlyingToken));
+        wsToken = new WsToken(
+            string(abi.encodePacked("ws", tokenName)), string(abi.encodePacked("ws", tokenSymbol)), underlyingToken_
+        );
+
+        withdrawManager = new Withdraw(address(sToken), address(wsToken), address(this), 4 days);
 
         // Set this contract as authorized minter for the sToken
-        underlyingToken.setAuthorizedMinter(address(this), true);
+        sToken.setAuthorizedMinter(address(this), true);
+        wsToken.setAuthorizedMinter(address(this), true);
 
         // Add supported tokens
         supportedTokens[underlyingToken_] = true;
@@ -71,7 +71,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     function autoWrap(address user, uint256 sAmount) internal {
         uint256 beforeBalance = wsToken.balanceOf(address(this));
 
-        IERC20(address(underlyingToken)).approve(address(wsToken), sAmount);
+        IERC20(address(sToken)).approve(address(wsToken), sAmount);
 
         wsToken.wrap(sAmount);
 
@@ -79,9 +79,6 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         uint256 minted = afterBalance - beforeBalance; // Calculate minted wsToken
 
         wsToken.transfer(user, minted);
-
-        console.log("AutoWrap: minted wsToken =", minted);
-        console.log("User wsToken balance =", wsToken.balanceOf(user));
     }
 
     /**
@@ -89,14 +86,14 @@ contract SuperCluster is Ownable, ReentrancyGuard {
      */
     function rebase() external {
         uint256 newAUM = calculateTotalAUM();
-        underlyingToken.rebase(newAUM);
+        sToken.rebase(newAUM);
     }
 
     /**
      * @dev Manual rebase with specific AUM (for testing/admin)
      */
     function rebaseWithAUM(uint256 newAUM) external onlyOwner {
-        underlyingToken.rebase(newAUM);
+        sToken.rebase(newAUM);
     }
 
     /**
@@ -106,8 +103,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         uint256 totalAUM = 0;
 
         //  Check actual token balance in contract
-        address underlyingTokenAddress = underlyingToken.underlyingToken();
-        totalAUM += IERC20(underlyingTokenAddress).balanceOf(address(this));
+        totalAUM += IERC20(address(sToken)).balanceOf(address(this));
 
         // Add assets managed by all pilots
         for (uint256 i = 0; i < pilots.length; i++) {
@@ -132,9 +128,8 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         tokenBalances[token] += amount;
 
         // Mint sToken to user and update assets under management
-        underlyingToken.mint(msg.sender, amount);
-        underlyingToken.updateAssetsUnderManagement(underlyingToken.totalSupply());
-        console.log("User sToken balance after mint:", underlyingToken.balanceOf(msg.sender));
+        sToken.mint(msg.sender, amount);
+        sToken.updateAssetsUnderManagement(sToken.totalSupply());
 
         emit TokenDeposited(token, msg.sender, amount);
     }
@@ -146,7 +141,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         if (amount == 0) revert AmountMustBeGreaterThanZero();
         if (!supportedTokens[token]) revert TokenNotSupported();
         if (tokenBalances[token] < amount) revert InsufficientBalance();
-        if (underlyingToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
+        if (sToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
         // require withdrawManager to be set
         if (address(withdrawManager) == address(0)) revert TransferFailed();
@@ -155,10 +150,10 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         tokenBalances[token] -= amount;
 
         // Burn user's sToken (SuperCluster authorized as minter/burner)
-        underlyingToken.burn(msg.sender, amount);
+        sToken.burn(msg.sender, amount);
 
         // Update AUM after burn
-        underlyingToken.updateAssetsUnderManagement(underlyingToken.totalSupply());
+        sToken.updateAssetsUnderManagement(sToken.totalSupply());
 
         // Notify withdraw manager once (it will create request)
         withdrawManager.autoRequest(msg.sender, amount);
@@ -174,14 +169,13 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         if (amount == 0) revert AmountMustBeGreaterThanZero();
         if (!supportedTokens[token]) revert TokenNotSupported();
         if (tokenBalances[token] < amount) revert InsufficientBalance();
-        console.log("User sToken balance:", underlyingToken.balanceOf(msg.sender));
-        if (underlyingToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
+        if (sToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
         // Update token balance
         tokenBalances[token] -= amount;
 
         // Burn sToken from user and update assets under management
-        underlyingToken.burn(msg.sender, amount);
+        sToken.burn(msg.sender, amount);
         bool status = IERC20(token).transfer(pilot, amount);
         require(status, "Transfer failed");
 

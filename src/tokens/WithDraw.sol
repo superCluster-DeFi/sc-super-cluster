@@ -26,6 +26,7 @@ contract Withdraw is Ownable {
     IERC20 public immutable baseToken; // underlying token (e.g., ETH wrapped or ERC20)
     ISToken public immutable sToken; // rebasing token (sToken)
 
+    uint256 public lastRebaseTime;
     uint256 public withdrawDelay; // optional delay (seconds) between request and claim availability
     uint256 public nextRequestId;
 

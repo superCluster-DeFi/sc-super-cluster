@@ -235,7 +235,7 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev ✅ Withdraw for user (called by SuperCluster)
+     * @dev Withdraw for user (called by SuperCluster)
      */
     function withdrawForUser(uint256 amount) external override {
         require(msg.sender == superClusterAddress, "Only SuperCluster");

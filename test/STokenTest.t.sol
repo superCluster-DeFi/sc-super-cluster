@@ -32,8 +32,8 @@ contract sTokenTest is Test {
         console.log("Deployed mock tokens - IDRX:", address(idrx), "USDC:", address(usdc));
 
         // Deploy SToken with USDC as underlying token
-        token = new SToken("sUSDC", "sUSDC", address(usdc), address(usdc));
-        wrappedToken = new WsToken(address(token));
+        token = new SToken("sUSDC", "sUSDC", address(usdc));
+        wrappedToken = new WsToken("wsUSDC", "wsUSDC", address(token));
         console.log("Deployed SToken:", address(token), "wsToken:", address(wrappedToken));
 
         // Set authorized minter
@@ -209,12 +209,12 @@ contract sTokenTest is Test {
         console.log("Current SToken symbol:", token.symbol());
 
         // Create new token with different underlying
-        SToken idrxToken = new SToken("sIDRX", "sIDRX", address(idrx), address(idrx));
+        SToken idrxToken = new SToken("sIDRX", "sIDRX", address(idrx));
         console.log("IDRX SToken name:", idrxToken.name());
         console.log("IDRX SToken symbol:", idrxToken.symbol());
 
         assertEq(token.name(), "sUSDC");
-        idrxToken = new SToken("sIDRX", "sIDRX", address(idrx), address(idrx));
+        idrxToken = new SToken("sIDRX", "sIDRX", address(idrx));
         assertEq(token.symbol(), "sUSDC");
         assertEq(idrxToken.name(), "sIDRX");
         assertEq(idrxToken.symbol(), "sIDRX");

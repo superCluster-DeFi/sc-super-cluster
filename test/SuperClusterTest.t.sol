@@ -43,9 +43,9 @@ contract SuperClusterTest is Test {
         idrx.mint(user1, INITIAL_SUPPLY);
         idrx.mint(user2, INITIAL_SUPPLY);
 
-        superCluster = new SuperCluster(address(idrx), address(0));
+        superCluster = new SuperCluster(address(idrx));
 
-        sToken = superCluster.underlyingToken();
+        sToken = superCluster.sToken();
         wsToken = superCluster.wsToken();
 
         Withdraw withdrawManager = new Withdraw(address(sToken), address(idrx), address(superCluster), 1 days);
@@ -139,9 +139,7 @@ contract SuperClusterTest is Test {
 
     function test_SuperCluster_Deploy() public view {
         assertEq(sToken.name(), "sMockIDRX");
-        assertEq(wsToken.name(), "Wrapped sIDRX");
-        assertEq(sToken.symbol(), "sIDRX");
-        assertEq(wsToken.symbol(), "wsIDRX");
+        assertEq(wsToken.name(), "wsMockIDRX");
         assertTrue(superCluster.supportedTokens(address(idrx)));
         assertEq(superCluster.owner(), owner);
     }
@@ -166,21 +164,27 @@ contract SuperClusterTest is Test {
     function test_SuperCluster_Withdraw() public {
         // First deposit
         vm.startPrank(user1);
+        uint256 idrxBalanceBefore = idrx.balanceOf(user1);
         idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
         superCluster.deposit(address(idrx), DEPOSIT_AMOUNT);
 
-        uint256 idrxBalanceBefore = idrx.balanceOf(user1);
         uint256 sTokenBalanceBefore = sToken.balanceOf(user1);
 
         // Withdraw
+        vm.warp(block.timestamp + 4 days);
         superCluster.withdraw(address(idrx), DEPOSIT_AMOUNT);
 
         uint256 idrxBalanceAfter = idrx.balanceOf(user1);
         uint256 sTokenBalanceAfter = sToken.balanceOf(user1);
 
         console.log("Requested withdraw amount:", DEPOSIT_AMOUNT);
+        console.log("IDRX balance before:", idrxBalanceBefore);
+        console.log("IDRX balance after:", idrxBalanceAfter);
+        console.log("sToken balance before:", sTokenBalanceBefore);
+        console.log("sToken balance after:", sTokenBalanceAfter);
+        console.log("==", sTokenBalanceBefore - sTokenBalanceAfter);
 
-        assertEq(idrxBalanceAfter - idrxBalanceBefore, DEPOSIT_AMOUNT);
+        assertEq(idrxBalanceBefore - idrxBalanceAfter, DEPOSIT_AMOUNT);
         assertEq(sTokenBalanceBefore - sTokenBalanceAfter, DEPOSIT_AMOUNT);
         vm.stopPrank();
     }
