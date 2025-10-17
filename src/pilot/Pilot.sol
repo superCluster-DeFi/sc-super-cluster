@@ -6,6 +6,7 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPilot} from "../interfaces/IPilot.sol";
 import {IAdapter} from "../interfaces/IAdapter.sol";
+import {console} from "forge-std/console.sol";
 
 contract Pilot is IPilot, Ownable, ReentrancyGuard {
     string public override name;
@@ -31,10 +32,13 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     error InsufficientBalance();
     error ZeroAmount();
 
-    constructor(string memory _name, string memory __description, address _token) Ownable(msg.sender) {
+    constructor(string memory _name, string memory __description, address _token, address _superClusterAddress)
+        Ownable(msg.sender)
+    {
         name = _name;
         _description = __description;
         TOKEN = _token;
+        superClusterAddress = address(_superClusterAddress);
     }
 
     /**
@@ -79,6 +83,10 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     function receiveAndInvest(uint256 amount) external override {
         require(msg.sender == superClusterAddress, "Only SuperCluster");
 
+        IERC20(TOKEN).transferFrom(msg.sender, address(this), amount);
+
+        IERC20(TOKEN).approve(address(this), amount);
+
         // Auto-invest based on current strategy
         if (strategyAdapters.length > 0 && strategyAllocations.length > 0) {
             _distributeToAdapters(amount);
@@ -99,8 +107,8 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
 
                 if (adapterAmount > 0) {
                     // Transfer to adapter
-                    bool status = IERC20(TOKEN).transfer(adapter, adapterAmount);
-                    require(status, "Transfer failed");
+                    IERC20(TOKEN).approve(adapter, adapterAmount);
+
                     // Trigger deposit
                     IAdapter(adapter).deposit(adapterAmount);
                 }
