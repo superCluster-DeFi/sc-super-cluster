@@ -14,7 +14,6 @@ import {MockMorpho} from "../src/mocks/MockMorpho.sol";
 import {MockIDRX} from "../src/mocks/tokens/MockIDRX.sol";
 import {Id, MarketParams} from "../src/mocks/interfaces/IMorpho.sol";
 import {Withdraw} from "../src/tokens/WithDraw.sol";
-import {IAdapter} from "../src/interfaces/IAdapter.sol";
 
 contract SuperClusterTest is Test {
     SuperCluster public superCluster;
@@ -26,7 +25,6 @@ contract SuperClusterTest is Test {
     MorphoAdapter public morphoAdapter;
     LendingPool public mockAave;
     MockMorpho public mockMorpho;
-    Withdraw public withdrawManager;
 
     address public owner;
     address public user1;
@@ -45,26 +43,12 @@ contract SuperClusterTest is Test {
         idrx.mint(user1, INITIAL_SUPPLY);
         idrx.mint(user2, INITIAL_SUPPLY);
 
-        // Deploy SToken, WsToken and Withdraw separately to avoid large SuperCluster initcode
-        sToken = new SToken("sMockIDRX", "sIDRX", address(idrx));
-        wsToken = new WsToken("wsMockIDRX", "wsIDRX", address(sToken));
+        superCluster = new SuperCluster(address(idrx));
 
-        // Deploy SuperCluster first with a placeholder withdraw manager (address(0))
-        superCluster = new SuperCluster(address(idrx), address(sToken), address(wsToken), address(0));
+        sToken = superCluster.sToken();
+        wsToken = superCluster.wsToken();
 
-        // Deploy Withdraw manager with the correct SuperCluster address
-        withdrawManager = new Withdraw(address(sToken), address(idrx), address(superCluster), 1 days);
-
-        // Set the withdraw manager in SuperCluster (owner only)
-        superCluster.setWithdrawManager(address(withdrawManager));
-
-        // After deploying SuperCluster, set proper owner/links as needed
-        // Set authorized minter flags on tokens for SuperCluster
-        sToken.setAuthorizedMinter(address(superCluster), true);
-        wsToken.setAuthorizedMinter(address(superCluster), true);
-
-        // Update withdrawManager's superCluster reference if necessary (owner only)
-        // withdrawManager was created with zero superCluster, so transfer ownership to this test and set if needed
+        Withdraw withdrawManager = new Withdraw(address(sToken), address(idrx), address(superCluster), 1 days);
 
         //Deploy Mock protocols
         _deployMockProtocols();
@@ -134,44 +118,21 @@ contract SuperClusterTest is Test {
     }
 
     function _deployPilot() internal {
-        // First deploy adapters so we can set up the pilot with them
-        aaveAdapter = new AaveAdapter(address(idrx), address(mockAave), "Aave V3", "Conservative Lending");
-
         pilot = new Pilot(
-            "Conservative DeFi Pilot",
-            "Low-risk DeFi strategies focusing on lending protocols",
-            address(idrx),
-            address(idrx),
-            address(mockAave),
-            address(superCluster)
+            "Conservative DeFi Pilot", "Low-risk DeFi strategies focusing on lending protocols", address(idrx)
         );
     }
 
     function _setupPilotStrategy() internal {
-        // Register the pilot's strategy
-        string memory strategyName = "Conservative DeFi Pilot";
-        superCluster.registerStrategy(strategyName, address(pilot));
+        address[] memory adapters = new address[](2);
+        uint256[] memory allocations = new uint256[](2);
 
-        // Setup test users
-        vm.startPrank(user1);
-        superCluster.selectStrategy(strategyName);
-        idrx.approve(address(superCluster), type(uint256).max);
-        // Also approve pilot directly for investment operations
-        idrx.approve(address(pilot), type(uint256).max);
-        vm.stopPrank();
+        adapters[0] = address(aaveAdapter);
+        adapters[1] = address(morphoAdapter);
+        allocations[0] = 6000; // 60% Aave
+        allocations[1] = 4000; // 40% Morpho
 
-        vm.startPrank(user2);
-        superCluster.selectStrategy(strategyName);
-        idrx.approve(address(superCluster), type(uint256).max);
-        idrx.approve(address(pilot), type(uint256).max);
-        vm.stopPrank();
-
-        // Make sure pilot has approval for IDRX operations
-        vm.startPrank(owner);
-        idrx.approve(address(pilot), type(uint256).max);
-        // Make sure withdrawManager is properly set up
-        withdrawManager = superCluster.withdrawManager();
-        vm.stopPrank();
+        pilot.setPilotStrategy(adapters, allocations);
     }
 
     // ==================== SUPERCLUSTER TESTS ====================
@@ -184,11 +145,8 @@ contract SuperClusterTest is Test {
     }
 
     function test_SuperCluster_Deposit() public {
-        string memory strategyName = "Conservative DeFi Pilot";
-
         vm.startPrank(user1);
-        idrx.approve(address(superCluster), type(uint256).max);
-        superCluster.selectStrategy(strategyName);
+        idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
 
         uint256 balanceBefore = sToken.balanceOf(user1);
         console.log("sToken balance before deposit:", balanceBefore);
@@ -204,39 +162,37 @@ contract SuperClusterTest is Test {
     }
 
     function test_SuperCluster_Withdraw() public {
-        string memory strategyName = "Conservative DeFi Pilot";
-
+        // First deposit
         vm.startPrank(user1);
-        idrx.approve(address(superCluster), type(uint256).max);
-        superCluster.selectStrategy(strategyName);
-
-        // Initial deposit
+        uint256 idrxBalanceBefore = idrx.balanceOf(user1);
+        idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
         superCluster.deposit(address(idrx), DEPOSIT_AMOUNT);
-        uint256 sTokenBalance = sToken.balanceOf(user1);
-        assertEq(sTokenBalance, DEPOSIT_AMOUNT, "Should receive sToken for deposit");
 
-        // Wait for lock period
+        uint256 sTokenBalanceBefore = sToken.balanceOf(user1);
+
+        // Withdraw
         vm.warp(block.timestamp + 4 days);
-
-        // Withdraw full amount
         superCluster.withdraw(address(idrx), DEPOSIT_AMOUNT);
 
-        // Check balances after withdrawal
+        uint256 idrxBalanceAfter = idrx.balanceOf(user1);
         uint256 sTokenBalanceAfter = sToken.balanceOf(user1);
-        uint256 withdrawManagerBalance = sToken.balanceOf(address(superCluster.withdrawManager()));
 
-        assertEq(sTokenBalanceAfter, 0, "User should have no sToken left");
-        assertEq(withdrawManagerBalance, DEPOSIT_AMOUNT, "WithdrawManager should hold sToken");
+        console.log("Requested withdraw amount:", DEPOSIT_AMOUNT);
+        console.log("IDRX balance before:", idrxBalanceBefore);
+        console.log("IDRX balance after:", idrxBalanceAfter);
+        console.log("sToken balance before:", sTokenBalanceBefore);
+        console.log("sToken balance after:", sTokenBalanceAfter);
+        console.log("==", sTokenBalanceBefore - sTokenBalanceAfter);
+
+        assertEq(idrxBalanceBefore - idrxBalanceAfter, DEPOSIT_AMOUNT);
+        assertEq(sTokenBalanceBefore - sTokenBalanceAfter, DEPOSIT_AMOUNT);
         vm.stopPrank();
     }
 
     function test_SuperCluster_SelectPilot() public {
-        string memory strategyName = "Conservative DeFi Pilot";
-
         // First deposit
         vm.startPrank(user1);
-        idrx.approve(address(superCluster), type(uint256).max);
-        superCluster.selectStrategy(strategyName);
+        idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
         superCluster.deposit(address(idrx), DEPOSIT_AMOUNT);
 
         uint256 pilotBalanceBefore = idrx.balanceOf(address(pilot));
@@ -269,12 +225,9 @@ contract SuperClusterTest is Test {
     }
 
     function test_SuperCluster_Rebase() public {
-        string memory strategyName = "Conservative DeFi Pilot";
-
         // Deposit to SuperCluster
         vm.startPrank(user1);
-        idrx.approve(address(superCluster), type(uint256).max);
-        superCluster.selectStrategy(strategyName);
+        idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
         superCluster.deposit(address(idrx), DEPOSIT_AMOUNT);
         vm.stopPrank();
 
@@ -324,45 +277,49 @@ contract SuperClusterTest is Test {
         assertEq(pilot.TOKEN(), address(idrx));
     }
 
-    function test_Pilot_GetStrategy() public view {
-        // Strategy is fixed in constructor, verify it's properly set
+    function test_Pilot_SetStrategy() public {
+        address[] memory adapters = new address[](1);
+        uint256[] memory allocations = new uint256[](1);
+
+        adapters[0] = address(aaveAdapter);
+        allocations[0] = 10000; // 100%
+
+        pilot.setPilotStrategy(adapters, allocations);
+
         (address[] memory returnedAdapters, uint256[] memory returnedAllocations) = pilot.getStrategy();
-        IAdapter localAaveAdapter = pilot.aaveAdapter();
 
         assertEq(returnedAdapters.length, 1);
-        assertEq(returnedAdapters[0], address(localAaveAdapter)); // Use the adapter from pilot
         assertEq(returnedAllocations.length, 1);
-        assertEq(returnedAllocations[0], 10000); // Should be 100%
+        assertEq(returnedAdapters[0], address(aaveAdapter));
+        assertEq(returnedAllocations[0], 10000);
     }
 
     function test_Pilot_Invest() public {
-        // Get the pilot's fixed strategy
-        (address[] memory adapters, uint256[] memory allocations) = pilot.getStrategy();
-        IAdapter aave = pilot.aaveAdapter();
-
-        // Fund pilot with tokens
+        // Transfer tokens to pilot
         idrx.transfer(address(pilot), DEPOSIT_AMOUNT);
 
-        // Invest using pilot's fixed strategy
+        address[] memory adapters = new address[](1);
+        uint256[] memory allocations = new uint256[](1);
+        adapters[0] = address(aaveAdapter);
+        allocations[0] = 10000;
+
+        // Fund adapter with tokens first
+        idrx.transfer(address(aaveAdapter), DEPOSIT_AMOUNT);
+
         pilot.invest(DEPOSIT_AMOUNT, adapters, allocations);
 
-        // Check if pilot's adapter received tokens
-        assertTrue(aave.getBalance() > 0);
+        // Check if adapter received tokens
+        assertTrue(aaveAdapter.getBalance() > 0);
     }
 
     function test_Pilot_GetTotalValue() public {
-        // Get the pilot's fixed strategy
-        (address[] memory adapters, uint256[] memory allocations) = pilot.getStrategy();
-
-        // Fund pilot with tokens and invest them
+        // Transfer some tokens to pilot (idle funds)
         idrx.transfer(address(pilot), 500e18);
-        idrx.approve(address(pilot), 500e18);
-        pilot.invest(500e18, adapters, allocations);
 
         uint256 totalValue = pilot.getTotalValue();
 
-        // Should include invested funds
-        assertGt(totalValue, 0);
+        // Should include idle funds
+        assertGe(totalValue, 500e18);
     }
 
     function test_Fail_Pilot_InvalidAllocation() public {

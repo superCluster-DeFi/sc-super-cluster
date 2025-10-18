@@ -15,7 +15,7 @@ contract AaveAdapter is Adapter {
     }
 
     /**
-     * @dev DEPOSIT: Supply to MockAave
+     * @dev ✅ DEPOSIT: Supply to MockAave
      */
     function deposit(uint256 amount) external override onlyActive returns (uint256 shares) {
         if (amount == 0) revert InvalidAmount();
@@ -42,7 +42,7 @@ contract AaveAdapter is Adapter {
     }
 
     /**
-     * @dev WITHDRAW: Withdraw from MockAave
+     * @dev ✅ WITHDRAW: Withdraw from MockAave
      */
     function withdraw(uint256 shares) external override onlyActive returns (uint256 amount) {
         if (shares == 0) revert InvalidAmount();
@@ -74,21 +74,21 @@ contract AaveAdapter is Adapter {
     }
 
     /**
-     * @dev GET BALANCE: Get current supply balance in assets
+     * @dev ✅ GET BALANCE: Get current supply balance in assets
      */
     function getBalance() external view override returns (uint256) {
         return LENDINGPOOL.getUserSupplyBalance(address(this));
     }
 
     /**
-     * @dev GET SUPPLY SHARES: Get raw supply shares
+     * @dev ✅ GET SUPPLY SHARES: Get raw supply shares
      */
     function getSupplyShares() external view returns (uint256) {
         return LENDINGPOOL.getUserSupplyShares(address(this));
     }
 
     /**
-     * @dev Convert assets to shares based on current exchange rate
+     * @dev ✅ Convert assets to shares based on current exchange rate
      */
     function convertToShares(uint256 assets) external view returns (uint256) {
         if (assets == 0) return 0;
@@ -106,7 +106,7 @@ contract AaveAdapter is Adapter {
     }
 
     /**
-     * @dev Convert shares to assets based on current exchange rate
+     * @dev ✅ Convert shares to assets based on current exchange rate
      */
     function convertToAssets(uint256 shares) external view returns (uint256) {
         if (shares == 0) return 0;

@@ -101,6 +101,4 @@ interface IPilot {
      * @param amount Amount to withdraw for user
      */
     function withdrawForUser(uint256 amount) external;
-
-    function redeem(uint256 amount) external returns (uint256);
 }

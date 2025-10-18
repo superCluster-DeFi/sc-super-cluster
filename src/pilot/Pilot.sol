@@ -1,184 +1,288 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPilot} from "../interfaces/IPilot.sol";
 import {IAdapter} from "../interfaces/IAdapter.sol";
-import {AaveAdapter} from "../adapter/AaveAdapter.sol";
-import {SuperCluster} from "../SuperCluster.sol";
 
-contract Pilot is IPilot, Ownable {
-    using SafeERC20 for IERC20;
+contract Pilot is IPilot, Ownable, ReentrancyGuard {
+    string public override name;
+    string public _description;
+    address public immutable TOKEN;
+    address public superClusterAddress;
 
-    SuperCluster public immutable superCluster;
-    IERC20 public immutable underlyingToken;
-
-    // Basic pilot info
-    string private _name;
-    string private _description;
-    address public immutable acceptedToken;
-    address public immutable aaveProtocol;
-
-    // Strategy configuration
-    IAdapter public aaveAdapter;
-    address[] private _adapters;
-    uint256[] private _allocations;
+    // Strategy tracking
+    address[] public strategyAdapters;
+    uint256[] public strategyAllocations;
+    mapping(address => bool) public isActiveAdapter;
 
     // Events
-    event AdapterCreated(address adapter, string strategy);
-    event Deposited(address token, uint256 amount);
-    event Withdrawn(address token, uint256 amount);
-    event RewardsHarvested(uint256 amount);
+    event StrategyUpdated(address[] adapters, uint256[] allocations);
+    event Invested(uint256 amount, address[] adapters, uint256[] allocations);
+    event Divested(uint256 amount, address[] adapters, uint256[] allocations);
+    event Harvested(address[] adapters, uint256 totalHarvested);
 
     // Errors
-    error UnsupportedToken();
-    error InvalidAmount();
-    error AdapterNotInitialized();
+    error InvalidAllocation();
+    error AdapterNotActive();
+    error InvalidArrayLength();
     error InsufficientBalance();
-    error InvalidStrategy();
-    error InvalidAdapterLength();
-    error InvalidAllocationLength();
-    error AllocationSumError();
+    error ZeroAmount();
 
-    constructor(
-        string memory pilotName,
-        string memory pilotDescription,
-        address _acceptedToken,
-        address _underlyingToken,
-        address _aaveProtocol,
-        address _superCluster
-    ) Ownable(msg.sender) {
-        _name = pilotName;
-        _description = pilotDescription;
-        acceptedToken = _acceptedToken;
-        underlyingToken = IERC20(_underlyingToken);
-        aaveProtocol = _aaveProtocol;
-        superCluster = SuperCluster(_superCluster);
-        _initializeAdapter();
+    constructor(string memory _name, string memory __description, address _token) Ownable(msg.sender) {
+        name = _name;
+        _description = __description;
+        TOKEN = _token;
     }
 
-    function _initializeAdapter() internal {
-        require(address(aaveAdapter) == address(0), "Already initialized");
-        aaveAdapter = new AaveAdapter(acceptedToken, aaveProtocol, "Aave", _name);
-        _adapters = [address(aaveAdapter)];
-        _allocations = [10000]; // 100% allocation (basis points)
-        emit AdapterCreated(address(aaveAdapter), _name);
+    /**
+     * @dev Invest funds according to pilot's strategy
+     */
+    function invest(uint256 amount, address[] calldata adapters, uint256[] calldata allocations)
+        external
+        override
+        onlyOwner
+        nonReentrant
+    {
+        if (amount == 0) revert ZeroAmount();
+        if (adapters.length != allocations.length) revert InvalidArrayLength();
+
+        // Validate allocations sum to 10000 (100%)
+        uint256 totalAllocation = 0;
+        for (uint256 i = 0; i < allocations.length; i++) {
+            totalAllocation += allocations[i];
+            if (!isActiveAdapter[adapters[i]]) revert AdapterNotActive();
+        }
+        if (totalAllocation != 10000) revert InvalidAllocation();
+
+        // Check TOKEN balance
+        uint256 balance = IERC20(TOKEN).balanceOf(address(this));
+        if (balance < amount) revert InsufficientBalance();
+
+        // Distribute funds to adapters
+        for (uint256 i = 0; i < adapters.length; i++) {
+            uint256 adapterAmount = (amount * allocations[i]) / 10000;
+            if (adapterAmount > 0) {
+                IERC20(TOKEN).approve(adapters[i], adapterAmount);
+                IAdapter(adapters[i]).deposit(adapterAmount);
+            }
+        }
+
+        emit Invested(amount, adapters, allocations);
     }
 
-    function TOKEN() external view returns (address) {
-        return acceptedToken;
+    /**
+     * @dev Auto-invest funds from SuperCluster
+     */
+    function receiveAndInvest(uint256 amount) external override {
+        require(msg.sender == superClusterAddress, "Only SuperCluster");
+
+        // Auto-invest based on current strategy
+        if (strategyAdapters.length > 0 && strategyAllocations.length > 0) {
+            _distributeToAdapters(amount);
+        }
+        // If no strategy set, keep idle in pilot
     }
 
-    function name() external view returns (string memory) {
-        return _name;
+    /**
+     * @dev Distribute to adapters based on allocation
+     */
+    function _distributeToAdapters(uint256 totalAmount) internal {
+        for (uint256 i = 0; i < strategyAdapters.length; i++) {
+            address adapter = strategyAdapters[i];
+            uint256 allocation = strategyAllocations[i];
+
+            if (allocation > 0 && isActiveAdapter[adapter]) {
+                uint256 adapterAmount = (totalAmount * allocation) / 10000;
+
+                if (adapterAmount > 0) {
+                    // Transfer to adapter
+                    bool status = IERC20(TOKEN).transfer(adapter, adapterAmount);
+                    require(status, "Transfer failed");
+                    // Trigger deposit
+                    IAdapter(adapter).deposit(adapterAmount);
+                }
+            }
+        }
     }
 
-    function description() external view returns (string memory) {
+    /**
+     * @dev Divest funds from external protocols
+     */
+    function divest(uint256 amount, address[] calldata adapters, uint256[] calldata allocations)
+        external
+        override
+        onlyOwner
+        nonReentrant
+    {
+        if (amount == 0) revert ZeroAmount();
+        if (adapters.length != allocations.length) revert InvalidArrayLength();
+
+        // Validate allocations sum to 10000 (100%)
+        uint256 totalAllocation = 0;
+        for (uint256 i = 0; i < allocations.length; i++) {
+            totalAllocation += allocations[i];
+            if (!isActiveAdapter[adapters[i]]) revert AdapterNotActive();
+        }
+        if (totalAllocation != 10000) revert InvalidAllocation();
+
+        // Withdraw funds from adapters
+        for (uint256 i = 0; i < adapters.length; i++) {
+            uint256 adapterAmount = (amount * allocations[i]) / 10000;
+            if (adapterAmount > 0) {
+                // Convert amount to shares and withdraw
+                uint256 shares = IAdapter(adapters[i]).convertToShares(adapterAmount);
+                IAdapter(adapters[i]).withdraw(shares);
+            }
+        }
+
+        emit Divested(amount, adapters, allocations);
+    }
+
+    /**
+     * @dev Harvest rewards from external protocols
+     */
+    function harvest(address[] calldata adapters) external override onlyOwner nonReentrant {
+        uint256 totalHarvested = 0;
+
+        for (uint256 i = 0; i < adapters.length; i++) {
+            if (!isActiveAdapter[adapters[i]]) revert AdapterNotActive();
+
+            uint256 harvested = IAdapter(adapters[i]).harvest();
+            totalHarvested += harvested;
+        }
+
+        emit Harvested(adapters, totalHarvested);
+    }
+
+    /**
+     * @dev Get current strategy allocation
+     */
+    function getStrategy() external view override returns (address[] memory adapters, uint256[] memory allocations) {
+        return (strategyAdapters, strategyAllocations);
+    }
+
+    /**
+     * @dev Get pilot's description
+     */
+    function description() external view override returns (string memory) {
         return _description;
     }
 
-    function setPilot(string memory newName) external onlyOwner {
-        _name = newName;
+    // Additional management functions
+    function setPilot(string memory _name) external onlyOwner {
+        name = _name;
     }
 
-    function setDescription(string memory newDescription) external onlyOwner {
-        _description = newDescription;
+    function setDescription(string memory __description) external onlyOwner {
+        _description = __description;
     }
 
-    function addAdapter(address /* adapter */ ) external view onlyOwner {
-        revert InvalidStrategy(); // This pilot only supports one adapter
-    }
+    /**
+     * @dev Set strategy allocation
+     */
+    function setPilotStrategy(address[] calldata adapters, uint256[] calldata allocations) external onlyOwner {
+        if (adapters.length != allocations.length) revert InvalidArrayLength();
 
-    function removeAdapter(address /* adapter */ ) external view onlyOwner {
-        revert InvalidStrategy(); // This pilot only supports one adapter
-    }
-
-    function isActiveAdapter(address adapter) external view returns (bool) {
-        return adapter == address(aaveAdapter);
-    }
-
-    function setPilotStrategy(address[] calldata, /* adapters */ uint256[] calldata /* allocations */ )
-        external
-        view
-        onlyOwner
-    {
-        revert InvalidStrategy(); // This pilot has fixed strategy
-    }
-
-    function getStrategy() external view returns (address[] memory adapters, uint256[] memory allocations) {
-        return (_adapters, _allocations);
-    }
-
-    function invest(uint256 amount, address[] calldata investAdapters, uint256[] calldata /* allocations */ )
-        external
-    {
-        if (investAdapters.length != 1 || investAdapters[0] != address(aaveAdapter)) revert InvalidStrategy();
-        if (amount == 0) revert InvalidAmount();
-
-        IERC20(acceptedToken).safeTransferFrom(msg.sender, address(this), amount);
-        IERC20(acceptedToken).approve(address(aaveAdapter), amount);
-        aaveAdapter.deposit(amount);
-    }
-
-    function divest(uint256 amount, address[] calldata divest_adapters, uint256[] calldata /* _allocations */ )
-        external
-    {
-        if (divest_adapters.length != 1 || divest_adapters[0] != address(aaveAdapter)) revert InvalidStrategy();
-        if (amount == 0) revert InvalidAmount();
-
-        uint256 withdrawn = aaveAdapter.withdraw(amount);
-        IERC20(acceptedToken).safeTransfer(msg.sender, withdrawn);
-    }
-
-    function harvest(address[] calldata adapters) external {
-        if (adapters.length != 1 || adapters[0] != address(aaveAdapter)) revert InvalidStrategy();
-        uint256 rewards = aaveAdapter.harvest();
-        if (rewards > 0) {
-            emit RewardsHarvested(rewards);
+        // Validate allocations sum to 10000 (100%)
+        uint256 totalAllocation = 0;
+        for (uint256 i = 0; i < allocations.length; i++) {
+            totalAllocation += allocations[i];
         }
+        if (totalAllocation != 10000) revert InvalidAllocation();
+
+        // Clear existing strategy
+        for (uint256 i = 0; i < strategyAdapters.length; i++) {
+            isActiveAdapter[strategyAdapters[i]] = false;
+        }
+
+        // Set new strategy
+        strategyAdapters = adapters;
+        strategyAllocations = allocations;
+
+        for (uint256 i = 0; i < adapters.length; i++) {
+            isActiveAdapter[adapters[i]] = true;
+        }
+
+        emit StrategyUpdated(adapters, allocations);
     }
 
-    function getTotalValue() external view returns (uint256) {
-        return aaveAdapter.getBalance();
+    /**
+     * @dev Add adapter to active list
+     */
+    function addAdapter(address adapter) external onlyOwner {
+        isActiveAdapter[adapter] = true;
     }
 
-    function receiveAndInvest(uint256 amount) external {
-        if (amount == 0) revert InvalidAmount();
-
-        // Pull tokens from caller (SuperCluster) into this Pilot contract
-        IERC20(acceptedToken).safeTransferFrom(msg.sender, address(this), amount);
-
-        // Approve adapter and deposit
-        IERC20(acceptedToken).approve(address(aaveAdapter), amount);
-        aaveAdapter.deposit(amount);
+    /**
+     * @dev Remove adapter from active list
+     */
+    function removeAdapter(address adapter) external onlyOwner {
+        isActiveAdapter[adapter] = false;
     }
 
-    function withdrawForUser(uint256 amount) external {
-        if (amount == 0) revert InvalidAmount();
-
-        uint256 withdrawn = aaveAdapter.withdraw(amount);
-        IERC20(acceptedToken).safeTransfer(msg.sender, withdrawn);
-    }
-
+    /**
+     * @dev Emergency withdraw all IDRX tokens
+     */
     function emergencyWithdraw() external onlyOwner {
-        uint256 adapterBalance = aaveAdapter.getBalance();
-        if (adapterBalance > 0) {
-            uint256 withdrawn = aaveAdapter.withdraw(adapterBalance);
-            IERC20(acceptedToken).safeTransfer(owner(), withdrawn);
+        uint256 balance = IERC20(TOKEN).balanceOf(address(this));
+        if (balance > 0) {
+            bool status = IERC20(TOKEN).transfer(owner(), balance);
+            require(status, "Transfer failed");
         }
     }
 
-    function redeem(uint256 amount) external override returns (uint256) {
-        require(msg.sender == address(superCluster), "Not SuperCluster");
-        require(amount > 0, "Zero amount");
+    /**
+     * @dev Withdraw for user (called by SuperCluster)
+     */
+    function withdrawForUser(uint256 amount) external override {
+        require(msg.sender == superClusterAddress, "Only SuperCluster");
 
-        uint256 balance = underlyingToken.balanceOf(address(this));
-        require(balance >= amount, "Insufficient funds");
+        // Withdraw proportionally from adapters
+        _withdrawFromAdapters(amount);
 
-        underlyingToken.transfer(address(superCluster), amount);
+        // Transfer to SuperCluster
+        bool status = IERC20(TOKEN).transfer(superClusterAddress, amount);
+        require(status, "Transfer failed");
+    }
 
-        return amount;
+    /**
+     * @dev Withdraw from adapters proportionally
+     */
+    function _withdrawFromAdapters(uint256 totalAmount) internal {
+        for (uint256 i = 0; i < strategyAdapters.length; i++) {
+            address adapter = strategyAdapters[i];
+            uint256 allocation = strategyAllocations[i];
+
+            if (allocation > 0 && isActiveAdapter[adapter]) {
+                uint256 adapterWithdrawAmount = (totalAmount * allocation) / 10000;
+
+                if (adapterWithdrawAmount > 0) {
+                    uint256 sharesToWithdraw = IAdapter(adapter).convertToShares(adapterWithdrawAmount);
+
+                    if (sharesToWithdraw > 0) {
+                        IAdapter(adapter).withdraw(sharesToWithdraw);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * @dev Get total value from all adapters + idle funds
+     */
+    function getTotalValue() external view override returns (uint256) {
+        uint256 totalValue = IERC20(TOKEN).balanceOf(address(this)); // Idle funds
+
+        // Add adapter balances
+        for (uint256 i = 0; i < strategyAdapters.length; i++) {
+            if (isActiveAdapter[strategyAdapters[i]]) {
+                totalValue += IAdapter(strategyAdapters[i]).getBalance();
+            }
+        }
+
+        return totalValue;
     }
 }
