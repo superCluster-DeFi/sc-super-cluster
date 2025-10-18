@@ -7,14 +7,20 @@ contract IntegrationTest is SuperClusterTest {
     function test_Integration_FullUserFlow() public {
         console.log("=== Testing Full User Flow ===");
 
-        // 1. User deposits to SuperCluster
+        // Set up approvals
         vm.startPrank(user1);
-        idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
+        idrx.approve(address(superCluster), type(uint256).max); // Max approve for all operations
+
+        // 1. User deposits to SuperCluster
         superCluster.deposit(address(idrx), DEPOSIT_AMOUNT);
 
         uint256 sTokenBalance = sToken.balanceOf(user1);
         assertEq(sTokenBalance, DEPOSIT_AMOUNT);
         console.log("User deposited and received sTokens");
+
+        // Set strategy first
+        string memory strategyName = "Conservative DeFi Pilot";
+        superCluster.selectStrategy(strategyName);
 
         // 2. User selects pilot
         superCluster.selectPilot(address(pilot), address(idrx), DEPOSIT_AMOUNT);
@@ -26,24 +32,17 @@ contract IntegrationTest is SuperClusterTest {
         vm.stopPrank();
 
         // 3. Pilot auto-invests using strategy
-        address[] memory adapters = new address[](2);
-        uint256[] memory allocations = new uint256[](2);
-        adapters[0] = address(aaveAdapter);
-        adapters[1] = address(morphoAdapter);
-        allocations[0] = 6000; // 60%
-        allocations[1] = 4000; // 40%
+        (address[] memory adapters, uint256[] memory allocations) = pilot.getStrategy();
+        IAdapter pilotAaveAdapter = pilot.aaveAdapter();
 
         pilot.invest(DEPOSIT_AMOUNT, adapters, allocations);
 
-        // Check adapter balances
-        uint256 aaveBalance = aaveAdapter.getBalance();
-        uint256 morphoBalance = morphoAdapter.getBalance();
+        // Check adapter balance
+        uint256 aaveBalance = pilotAaveAdapter.getBalance();
 
         assertGt(aaveBalance, 0);
-        assertGt(morphoBalance, 0);
-        console.log("Pilot invested in adapters");
-        console.log("Aave balance:", aaveBalance);
-        console.log("Morpho balance:", morphoBalance);
+        console.log("Pilot invested using its adapter");
+        console.log("Adapter balance:", aaveBalance);
 
         // 4. Check total AUM calculation
         uint256 totalAUM = superCluster.calculateTotalAUM();
@@ -75,16 +74,19 @@ contract IntegrationTest is SuperClusterTest {
 
         uint256 depositAmount1 = 1000e18;
         uint256 depositAmount2 = 2000e18;
+        string memory strategyName = "Conservative DeFi Pilot";
 
         // User 1 deposits
         vm.startPrank(user1);
-        idrx.approve(address(superCluster), depositAmount1);
+        idrx.approve(address(superCluster), type(uint256).max);
+        superCluster.selectStrategy(strategyName);
         superCluster.deposit(address(idrx), depositAmount1);
         vm.stopPrank();
 
         // User 2 deposits
         vm.startPrank(user2);
-        idrx.approve(address(superCluster), depositAmount2);
+        idrx.approve(address(superCluster), type(uint256).max);
+        superCluster.selectStrategy(strategyName);
         superCluster.deposit(address(idrx), depositAmount2);
         vm.stopPrank();
 
@@ -120,47 +122,31 @@ contract IntegrationTest is SuperClusterTest {
     function test_Integration_PilotStrategy() public {
         console.log("=== Testing Pilot Strategy Management ===");
 
-        // Set up initial strategy
-        address[] memory adapters = new address[](2);
-        uint256[] memory allocations = new uint256[](2);
-        adapters[0] = address(aaveAdapter);
-        adapters[1] = address(morphoAdapter);
-        allocations[0] = 7000; // 70% Aave
-        allocations[1] = 3000; // 30% Morpho
-
-        pilot.setPilotStrategy(adapters, allocations);
+        // Get pilot's fixed strategy
+        (address[] memory adapters, uint256[] memory allocations) = pilot.getStrategy();
+        IAdapter pilotAaveAdapter = pilot.aaveAdapter();
 
         // Transfer funds to pilot
         idrx.transfer(address(pilot), DEPOSIT_AMOUNT);
 
-        // Invest using strategy
+        // Invest using pilot's strategy
         pilot.invest(DEPOSIT_AMOUNT, adapters, allocations);
 
         // Check allocation
-        uint256 aaveBalance = aaveAdapter.getBalance();
-        uint256 morphoBalance = morphoAdapter.getBalance();
-
-        uint256 expectedAave = (DEPOSIT_AMOUNT * 7000) / 10000;
-        uint256 expectedMorpho = (DEPOSIT_AMOUNT * 3000) / 10000;
-
-        assertApproxEqRel(aaveBalance, expectedAave, 1e16); // 1% tolerance
-        assertApproxEqRel(morphoBalance, expectedMorpho, 1e16);
+        uint256 aaveBalance = pilotAaveAdapter.getBalance();
+        assertGt(aaveBalance, 0, "Should have balance in Aave adapter");
 
         console.log("Strategy allocation working correctly");
-        console.log("Expected Aave:", expectedAave, "Actual:", aaveBalance);
-        console.log("Expected Morpho:", expectedMorpho, "Actual:", morphoBalance);
+        console.log("Aave balance:", aaveBalance);
 
-        // Test strategy update
-        allocations[0] = 5000; // 50% Aave
-        allocations[1] = 5000; // 50% Morpho
+        // Verify strategy settings
+        (address[] memory currentAdapters, uint256[] memory currentAllocations) = pilot.getStrategy();
+        assertEq(currentAdapters.length, 1, "Should have single adapter");
+        assertEq(currentAllocations.length, 1, "Should have single allocation");
+        assertEq(currentAllocations[0], 10000, "Should be 100% allocated");
+        assertEq(currentAdapters[0], address(pilotAaveAdapter), "Should match pilot's adapter");
 
-        pilot.setPilotStrategy(adapters, allocations);
-
-        (address[] memory newAdapters, uint256[] memory newAllocations) = pilot.getStrategy();
-        assertEq(newAllocations[0], 5000);
-        assertEq(newAllocations[1], 5000);
-
-        console.log("Strategy updated successfully");
+        console.log("Strategy verification successful");
     }
 
     function test_Integration_AdapterInteraction() public {

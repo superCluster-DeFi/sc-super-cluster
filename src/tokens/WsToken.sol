@@ -3,8 +3,8 @@ pragma solidity ^0.8.13;
 
 import {ERC20} from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {IERC20Metadata} from "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title WsToken (wrapped sToken)
@@ -16,13 +16,13 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
  *  - This matches the wstETH pattern: wsToken supply is fixed per holder, while each wsToken represents an
  *    increasing amount of STOKEN as rebases happen.
  */
-contract WsToken is ERC20 {
+contract WsToken is ERC20, Ownable {
     using SafeERC20 for IERC20;
 
-    address public immutable STOKEN;
     IERC20 public immutable STOKENCONTRACT;
     // optional reference if you have a specific SToken interface with extra functions
     // kept out for minimal dependency; if needed, you can cast to your SToken type
+    mapping(address => bool) public authorizedMinters;
 
     // Events
     event Wrapped(address indexed user, uint256 sTokenAmount, uint256 wsTokenAmount);
@@ -31,15 +31,16 @@ contract WsToken is ERC20 {
     /**
      * @param _sToken address of the rebasing token (e.g. sToken / stETH)
      */
-    constructor(address _sToken) ERC20(
-        // name: "Wrapped <symbol>" (kept short)
-        string(abi.encodePacked("Wrapped ", IERC20Metadata(_sToken).symbol())),
-        // symbol: "w<symbol>" (like wstETH)
-        string(abi.encodePacked("w", IERC20Metadata(_sToken).symbol()))
-    ) {
-        require(_sToken != address(0), "sToken address zero");
-        STOKEN = _sToken;
+    constructor(string memory _name, string memory _symbol, address _sToken)
+        ERC20(_name, _symbol)
+        Ownable(msg.sender)
+    {
+        require(_sToken != address(0), "underlying zero");
         STOKENCONTRACT = IERC20(_sToken);
+    }
+
+    function setAuthorizedMinter(address minter, bool authorized) external onlyOwner {
+        authorizedMinters[minter] = authorized;
     }
 
     /**
@@ -51,7 +52,7 @@ contract WsToken is ERC20 {
     function wrap(uint256 sTokenAmount) external {
         require(sTokenAmount > 0, "Amount must be > 0");
 
-        // Get current STOKEN balance held by this contract (includes rebases)
+        // Get current STOKEN balance held by this contract (includes rebases) same underlying token
         uint256 stTokenBalance = STOKENCONTRACT.balanceOf(address(this));
         uint256 _totalSupply = totalSupply();
 
@@ -113,7 +114,6 @@ contract WsToken is ERC20 {
     function unwrapTo(uint256 wsTokenAmount, address recipient) external {
         require(recipient != address(0), "Recipient zero");
         require(wsTokenAmount > 0, "Amount must be > 0");
-        require(balanceOf(msg.sender) >= wsTokenAmount, "Insufficient wsToken balance");
 
         uint256 _totalSupply = totalSupply();
         require(_totalSupply > 0, "Total supply zero");

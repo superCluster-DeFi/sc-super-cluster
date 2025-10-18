@@ -7,6 +7,7 @@ pragma solidity ^0.8.13;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
+import {SuperCluster} from "../SuperCluster.sol";
 
 interface ISToken {
     function transferFrom(address from, address to, uint256 amount) external returns (bool);
@@ -20,9 +21,12 @@ interface ISToken {
 contract Withdraw is Ownable {
     using SafeERC20 for IERC20;
 
+    address public immutable superCluster;
+
     IERC20 public immutable baseToken; // underlying token (e.g., ETH wrapped or ERC20)
     ISToken public immutable sToken; // rebasing token (sToken)
 
+    uint256 public lastRebaseTime;
     uint256 public withdrawDelay; // optional delay (seconds) between request and claim availability
     uint256 public nextRequestId;
 
@@ -44,10 +48,13 @@ contract Withdraw is Ownable {
     event Funded(address indexed sender, uint256 amount, uint256 balance);
     event RequestCancelled(uint256 indexed id, address indexed user, uint256 sAmount);
 
-    constructor(address _sToken, address _baseToken, uint256 _withdrawDelay) Ownable(msg.sender) {
+    constructor(address _sToken, address _baseToken, address _superCluster, uint256 _withdrawDelay)
+        Ownable(msg.sender)
+    {
         require(_sToken != address(0) && _baseToken != address(0), "Zero address");
         sToken = ISToken(_sToken);
         baseToken = IERC20(_baseToken);
+        superCluster = _superCluster;
         withdrawDelay = _withdrawDelay;
         nextRequestId = 1;
     }
@@ -83,9 +90,42 @@ contract Withdraw is Ownable {
         return id;
     }
 
-    /* ------------------------------------------------------------------------
-       Operator / owner: fund & finalize
-       ------------------------------------------------------------------------ */
+    function autoRequest(address user, uint256 sAmount) external returns (uint256) {
+        require(msg.sender == superCluster, "Only SuperCluster");
+        require(sAmount > 0, "Zero amount");
+
+        // Don't need to transfer sToken since SuperCluster already burned it
+        uint256 id = nextRequestId++;
+        Request storage r = requests[id];
+        r.user = user;
+        r.sAmount = sAmount;
+        r.requestedAt = block.timestamp;
+        r.finalized = false;
+        r.claimed = false;
+        r.availableAt = 0;
+        r.baseAmount = 0;
+
+        emit WithdrawRequested(id, user, sAmount, block.timestamp);
+        return id;
+    }
+
+    function requestWithdrawForUser(address user, uint256 sAmount) external returns (uint256) {
+        require(msg.sender != address(0), "Invalid sender");
+        require(sAmount > 0, "Zero amount");
+
+        // Transfer sToken from SuperCluster to Withdraw contract
+        bool ok = sToken.transferFrom(msg.sender, address(this), sAmount);
+        require(ok, "sToken transfer failed");
+
+        uint256 id = nextRequestId++;
+        Request storage r = requests[id];
+        r.user = user;
+        r.sAmount = sAmount;
+        r.requestedAt = block.timestamp;
+
+        emit WithdrawRequested(id, user, sAmount, block.timestamp);
+        return id;
+    }
 
     /// @notice Owner/Operator funds base tokens to this contract to fulfill claims.
     /// @dev Operator should unstake underlying assets off-chain and then call fund() to deposit base tokens for claims.
@@ -106,7 +146,10 @@ contract Withdraw is Ownable {
         require(!r.claimed, "Already claimed");
         require(baseAmount > 0, "Zero base amount");
 
-        // Basic safety: ensure contract has enough base tokens to cover
+        // Verify we have the sTokens
+        require(IERC20(address(sToken)).balanceOf(address(this)) >= r.sAmount, "No sTokens held");
+
+        // Verify we have the base tokens for withdrawal
         require(baseToken.balanceOf(address(this)) >= baseAmount, "Insufficient base funds");
 
         r.baseAmount = baseAmount;
@@ -158,13 +201,14 @@ contract Withdraw is Ownable {
         // mark claimed before external transfer to avoid reentrancy
         r.claimed = true;
 
-        // Burn held sToken to update SToken state (requires this contract to be authorized minter)
-        // If burn call fails (not authorized), we still proceed but sTokens remain in this contract;
-        // it's recommended to set this contract as authorized minter on SToken so burn reduces total AUM.
-        try ISToken(address(sToken)).burn(address(this), r.sAmount) {
-            // burned successfully
-        } catch {
-            // ignore: fallback to not burning if not allowed
+        // For autoRequest from SuperCluster, sToken is already burned
+        // Only try to burn if this contract actually holds the sToken (from manual requests)
+        if (IERC20(address(sToken)).balanceOf(address(this)) >= r.sAmount) {
+            try ISToken(address(sToken)).burn(address(this), r.sAmount) {
+                // burned successfully
+            } catch {
+                // ignore: fallback to not burning if not allowed
+            }
         }
 
         // Transfer base token to user
