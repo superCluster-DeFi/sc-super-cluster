@@ -9,6 +9,7 @@ import {SToken} from "./tokens/SToken.sol";
 import {IPilot} from "./interfaces/IPilot.sol";
 import {WsToken} from "./tokens/WsToken.sol";
 import {Withdraw} from "./tokens/WithDraw.sol";
+import {console} from "forge-std/console.sol";
 
 contract SuperCluster is Ownable, ReentrancyGuard {
     SToken public sToken; // SToken token (rebasing)
@@ -116,22 +117,29 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     /**
      * @dev Universal deposit function for any supported token
      */
-    function deposit(address token, uint256 amount) external {
+    function deposit(address pilot, address token, uint256 amount) external nonReentrant {
         if (amount == 0) revert AmountMustBeGreaterThanZero();
+        if (!registeredPilots[pilot]) revert PilotNotRegistered();
         if (!supportedTokens[token]) revert TokenNotSupported();
 
-        // Transfer token from user to this contract
-        bool success = IERC20(token).transferFrom(msg.sender, address(this), amount);
-        require(success, "Transfer failed");
+        // Transfer token dari user ke SuperCluster
+        IERC20(token).transferFrom(msg.sender, address(this), amount);
 
-        // Update token balance
-        tokenBalances[token] += amount;
-
-        // Mint sToken to user and update assets under management
+        // Mint sToken ke user
         sToken.mint(msg.sender, amount);
-        sToken.updateAssetsUnderManagement(sToken.totalSupply());
+
+        // Approve pilot for token transfer
+        IERC20(token).approve(pilot, amount);
+
+        // Deposit to pilot
+        IPilot(pilot).receiveAndInvest(amount);
+
+        // Update AUM
+        uint256 totalAUM = calculateTotalAUM();
+        sToken.updateAssetsUnderManagement(totalAUM);
 
         emit TokenDeposited(token, msg.sender, amount);
+        emit PilotSelected(pilot, token, amount);
     }
 
     /**
@@ -159,27 +167,6 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         withdrawManager.autoRequest(msg.sender, amount);
 
         emit TokenWithdrawn(token, msg.sender, amount);
-    }
-
-    /**
-     * @dev User selects a pilot for their funds using any supported token
-     */
-    function selectPilot(address pilot, address token, uint256 amount) external {
-        if (!registeredPilots[pilot]) revert PilotNotRegistered();
-        if (amount == 0) revert AmountMustBeGreaterThanZero();
-        if (!supportedTokens[token]) revert TokenNotSupported();
-        if (tokenBalances[token] < amount) revert InsufficientBalance();
-        if (sToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
-
-        // Update token balance
-        tokenBalances[token] -= amount;
-
-        // Burn sToken from user and update assets under management
-        sToken.burn(msg.sender, amount);
-        bool status = IERC20(token).transfer(pilot, amount);
-        require(status, "Transfer failed");
-
-        emit PilotSelected(pilot, token, amount);
     }
 
     /**

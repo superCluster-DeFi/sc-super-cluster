@@ -119,7 +119,10 @@ contract SuperClusterTest is Test {
 
     function _deployPilot() internal {
         pilot = new Pilot(
-            "Conservative DeFi Pilot", "Low-risk DeFi strategies focusing on lending protocols", address(idrx)
+            "Conservative DeFi Pilot",
+            "Low-risk DeFi strategies focusing on lending protocols",
+            address(idrx),
+            address(superCluster)
         );
     }
 
@@ -151,13 +154,13 @@ contract SuperClusterTest is Test {
         uint256 balanceBefore = sToken.balanceOf(user1);
         console.log("sToken balance before deposit:", balanceBefore);
 
-        superCluster.deposit(address(idrx), DEPOSIT_AMOUNT);
+        superCluster.deposit(address(pilot), address(idrx), DEPOSIT_AMOUNT);
 
         uint256 balanceAfter = sToken.balanceOf(user1);
         console.log("sToken balance after deposit:", balanceAfter);
 
         assertEq(balanceAfter - balanceBefore, DEPOSIT_AMOUNT);
-        assertEq(superCluster.tokenBalances(address(idrx)), DEPOSIT_AMOUNT);
+        assertEq(superCluster.tokenBalances(address(idrx)), 0);
         vm.stopPrank();
     }
 
@@ -166,12 +169,11 @@ contract SuperClusterTest is Test {
         vm.startPrank(user1);
         uint256 idrxBalanceBefore = idrx.balanceOf(user1);
         idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
-        superCluster.deposit(address(idrx), DEPOSIT_AMOUNT);
+        superCluster.deposit(address(pilot), address(idrx), DEPOSIT_AMOUNT);
 
         uint256 sTokenBalanceBefore = sToken.balanceOf(user1);
 
         // Withdraw
-        vm.warp(block.timestamp + 4 days);
         superCluster.withdraw(address(idrx), DEPOSIT_AMOUNT);
 
         uint256 idrxBalanceAfter = idrx.balanceOf(user1);
@@ -187,24 +189,6 @@ contract SuperClusterTest is Test {
         assertEq(idrxBalanceBefore - idrxBalanceAfter, DEPOSIT_AMOUNT);
         assertEq(sTokenBalanceBefore - sTokenBalanceAfter, DEPOSIT_AMOUNT);
         vm.stopPrank();
-    }
-
-    function test_SuperCluster_SelectPilot() public {
-        // First deposit
-        vm.startPrank(user1);
-        idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
-        superCluster.deposit(address(idrx), DEPOSIT_AMOUNT);
-
-        uint256 pilotBalanceBefore = idrx.balanceOf(address(pilot));
-        console.log("Pilot balance before:", pilotBalanceBefore);
-
-        // Select pilot
-        superCluster.selectPilot(address(pilot), address(idrx), DEPOSIT_AMOUNT);
-
-        uint256 pilotBalanceAfter = idrx.balanceOf(address(pilot));
-
-        vm.stopPrank();
-        assertEq(pilotBalanceAfter - pilotBalanceBefore, DEPOSIT_AMOUNT);
     }
 
     function test_SuperCluster_RegisterPilot() public {
@@ -228,7 +212,7 @@ contract SuperClusterTest is Test {
         // Deposit to SuperCluster
         vm.startPrank(user1);
         idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
-        superCluster.deposit(address(idrx), DEPOSIT_AMOUNT);
+        superCluster.deposit(address(pilot), address(idrx), DEPOSIT_AMOUNT);
         vm.stopPrank();
 
         uint256 aumBefore = superCluster.calculateTotalAUM();
@@ -244,14 +228,14 @@ contract SuperClusterTest is Test {
     function test_Fail_SuperCluster_Deposit_Zero_Amount() public {
         vm.prank(user1);
         vm.expectRevert();
-        superCluster.deposit(address(idrx), 0);
+        superCluster.deposit(address(pilot), address(idrx), 0);
     }
 
     function test_Fail_SuperCluster_Deposit_Unsupported_Token() public {
         MockIDRX unsupportedToken = new MockIDRX();
         vm.prank(user1);
         vm.expectRevert();
-        superCluster.deposit(address(unsupportedToken), DEPOSIT_AMOUNT);
+        superCluster.deposit(address(pilot), address(unsupportedToken), DEPOSIT_AMOUNT);
     }
 
     // ==================== STOKEN TESTS ====================
