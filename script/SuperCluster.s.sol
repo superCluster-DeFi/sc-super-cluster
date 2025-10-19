@@ -50,8 +50,8 @@ contract SuperClusterScript is Script {
         );
         console.log("Pilot deployed at:", address(pilot));
 
-        address[] memory adapters = new address[](2);
-        uint256[] memory allocations = new uint256[](2);
+        address[] memory adapters = new address[](1);
+        uint256[] memory allocations = new uint256[](1);
 
         adapters[0] = address(aaveAdapter);
         allocations[0] = 10000; // 100% Aave
