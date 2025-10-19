@@ -50,38 +50,25 @@ contract WithdrawTest is Test {
         user2 = vm.addr(2);
         superCluster = vm.addr(3);
 
-        console.log("=== Setting up environment ===");
-
         baseToken = new BaseToken();
         sToken = new MockSToken();
 
-        // constructor(address _sToken, address _baseToken, address _superCluster, uint256 _withdrawDelay)
         withdraw = new Withdraw(address(sToken), address(baseToken), superCluster, DELAY);
 
+        // Setup token balances & approvals
         sToken.mint(user1, 1000 ether);
         baseToken.mint(owner, 1000 ether);
 
-        vm.startPrank(user1);
+        vm.prank(user1);
         sToken.approve(address(withdraw), type(uint256).max);
-        vm.stopPrank();
-
-        vm.startPrank(owner);
-        baseToken.approve(address(withdraw), type(uint256).max);
-        vm.stopPrank();
 
         baseToken.approve(address(withdraw), type(uint256).max);
-
-        console.log("BaseToken deployed at:", address(baseToken));
-        console.log("SToken deployed at:", address(sToken));
-        console.log("Withdraw contract deployed at:", address(withdraw));
-        console.log("===============================");
     }
 
-    /// requestWithdraw()
+    /// --- test requestWithdraw()
     function test_RequestWithdraw() public {
-        vm.startPrank(user1);
+        vm.prank(user1);
         uint256 requestId = withdraw.requestWithdraw(100 ether);
-        vm.stopPrank();
 
         (address reqUser, uint256 sAmount,,,, bool finalized, bool claimed) = withdraw.getRequest(requestId);
         assertEq(reqUser, user1);
@@ -90,11 +77,10 @@ contract WithdrawTest is Test {
         assertFalse(claimed);
     }
 
-    /// autoRequest() — only SuperCluster
+    /// --- test autoRequest() by superCluster
     function test_AutoRequest_FromSuperCluster() public {
-        vm.startPrank(superCluster);
+        vm.prank(superCluster);
         uint256 requestId = withdraw.autoRequest(user1, 50 ether);
-        vm.stopPrank();
 
         (address reqUser, uint256 sAmount,,,, bool finalized, bool claimed) = withdraw.getRequest(requestId);
         assertEq(reqUser, user1);
@@ -103,18 +89,18 @@ contract WithdrawTest is Test {
         assertFalse(claimed);
     }
 
-    /// fund()
+    /// --- test fund() from owner
     function test_FundBaseTokens() public {
+        uint256 before = baseToken.balanceOf(address(withdraw));
         withdraw.fund(500 ether);
-        uint256 contractBal = baseToken.balanceOf(address(withdraw));
-        assertEq(contractBal, 500 ether);
+        uint256 afterBal = baseToken.balanceOf(address(withdraw));
+        assertEq(afterBal - before, 500 ether);
     }
 
-    /// finalizeWithdraw()
+    /// --- test finalizeWithdraw()
     function test_FinalizeWithdraw() public {
-        vm.startPrank(user1);
+        vm.prank(user1);
         uint256 requestId = withdraw.requestWithdraw(200 ether);
-        vm.stopPrank();
 
         withdraw.fund(500 ether);
         withdraw.finalizeWithdraw(requestId, 200 ether);
@@ -126,60 +112,68 @@ contract WithdrawTest is Test {
         assertGt(availableAt, 0);
     }
 
-    /// claim() after delay
-    function test_ClaimAfterFinalizeAndDelay() public {
-        vm.startPrank(user1);
+    /// --- test claim() after delay
+    function test_ClaimAfterDelay() public {
+        vm.prank(user1);
         uint256 requestId = withdraw.requestWithdraw(300 ether);
-        vm.stopPrank();
 
         withdraw.fund(500 ether);
         withdraw.finalizeWithdraw(requestId, 300 ether);
 
         vm.warp(block.timestamp + DELAY + 1);
 
-        vm.startPrank(user1);
         uint256 beforeBase = baseToken.balanceOf(user1);
+        vm.prank(user1);
         withdraw.claim(requestId);
-        vm.stopPrank();
-
         uint256 afterBase = baseToken.balanceOf(user1);
+
         assertEq(afterBase - beforeBase, 300 ether);
     }
 
-    /// cancelRequest() by owner
+    /// --- test processWithdraw() direct (instant claim by owner)
+    function test_ProcessWithdraw_ByOwner() public {
+        uint256 beforeBase = baseToken.balanceOf(user1);
+
+        withdraw.fund(1000 ether);
+        withdraw.processWithdraw(user1, 100 ether, 100 ether);
+
+        uint256 afterBase = baseToken.balanceOf(user1);
+        assertEq(afterBase - beforeBase, 100 ether);
+    }
+
+    /// --- test cancelRequest() by owner
     function test_CancelRequestByOwner() public {
-        vm.startPrank(user1);
+        vm.prank(user1);
         uint256 requestId = withdraw.requestWithdraw(150 ether);
-        vm.stopPrank();
 
         uint256 beforeBalance = sToken.balanceOf(user1);
         withdraw.cancelRequest(requestId);
         uint256 afterBalance = sToken.balanceOf(user1);
 
-        assertGt(afterBalance, beforeBalance);
+        assertGt(afterBalance, beforeBalance, "sToken must be returned");
 
+        // after cancel, getRequest() should show zero data
         (address reqUser,,,,,,) = withdraw.getRequest(requestId);
-        assertEq(reqUser, address(0));
+        assertEq(reqUser, address(0), "request should be deleted");
     }
 
-    /// emergencyWithdrawBase()
+    /// --- test emergencyWithdrawBase()
     function test_EmergencyWithdrawBase() public {
         withdraw.fund(100 ether);
         uint256 beforeOwner = baseToken.balanceOf(owner);
         withdraw.emergencyWithdrawBase(50 ether, owner);
         uint256 afterOwner = baseToken.balanceOf(owner);
-        assertEq(afterOwner, beforeOwner + 50 ether);
+        assertEq(afterOwner - beforeOwner, 50 ether);
     }
 
-    /// emergencyWithdrawSToken()
+    /// --- test emergencyWithdrawSToken()
     function test_EmergencyWithdrawSToken() public {
-        vm.startPrank(user1);
+        vm.prank(user1);
         withdraw.requestWithdraw(100 ether);
-        vm.stopPrank();
 
         uint256 beforeOwner = sToken.balanceOf(owner);
         withdraw.emergencyWithdrawSToken(50 ether, owner);
         uint256 afterOwner = sToken.balanceOf(owner);
-        assertEq(afterOwner, beforeOwner + 50 ether);
+        assertEq(afterOwner - beforeOwner, 50 ether);
     }
 }

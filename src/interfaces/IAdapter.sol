@@ -64,4 +64,7 @@ interface IAdapter {
      * @return strategy The pilot strategy name
      */
     function getPilotStrategy() external view returns (string memory strategy);
+
+    function getTotalAssets() external view returns (uint256);
+    function withdrawTo(address to, uint256 amount) external returns (uint256);
 }

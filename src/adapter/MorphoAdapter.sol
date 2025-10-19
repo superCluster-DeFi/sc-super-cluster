@@ -158,6 +158,33 @@ contract MorphoAdapter is Adapter {
         return MORPHO.market(marketId);
     }
 
+    function getTotalAssets() public view override returns (uint256) {
+        // Return the protocol-held supply assets for this adapter
+        return this.getBalance();
+    }
+
+    /**
+     * @dev WITHDRAW TO: Withdraw specified assets and send directly to receiver
+     */
+    function withdrawTo(address to, uint256 amount) external override onlyActive returns (uint256) {
+        if (amount == 0) revert InvalidAmount();
+
+        // Withdraw from MockMorpho by assets and send directly to `to`
+        (uint256 assetsWithdrawn,) = MORPHO.withdraw(
+            marketParams,
+            amount, // assets to withdraw
+            0, // shares (0 = withdraw by assets)
+            address(this), // onBehalf (this adapter)
+            to // receiver
+        );
+
+        // Update internal tracking
+        _updateTotalDeposited(assetsWithdrawn, false);
+
+        emit Withdrawn(assetsWithdrawn);
+        return assetsWithdrawn;
+    }
+
     /**
      * @dev Convert assets to shares using current rate
      */

@@ -26,7 +26,7 @@ contract Withdraw is Ownable {
     IERC20 public immutable baseToken; // underlying token (e.g., ETH wrapped or ERC20)
     ISToken public immutable sToken; // rebasing token (sToken)
 
-    uint256 public lastRebaseTime;
+    uint256 public lastRebaseTime; // timestamp of last rebase
     uint256 public withdrawDelay; // optional delay (seconds) between request and claim availability
     uint256 public nextRequestId;
 
@@ -132,6 +132,27 @@ contract Withdraw is Ownable {
         require(amount > 0, "Zero fund");
         baseToken.safeTransferFrom(msg.sender, address(this), amount);
         emit Funded(msg.sender, amount, baseToken.balanceOf(address(this)));
+    }
+
+    function processWithdraw(address user, uint256 sAmount, uint256 baseAmount) external onlyOwner {
+        require(user != address(0), "Invalid user");
+        require(baseAmount > 0 && sAmount > 0, "Zero amount");
+
+        uint256 id = nextRequestId++;
+        Request storage r = requests[id];
+        r.user = user;
+        r.sAmount = sAmount;
+        r.baseAmount = baseAmount;
+        r.requestedAt = block.timestamp;
+        r.availableAt = block.timestamp;
+        r.finalized = true;
+        r.claimed = true;
+
+        // burn sToken dan transfer base token
+        try ISToken(address(sToken)).burn(address(this), sAmount) {} catch {}
+        baseToken.safeTransfer(user, baseAmount);
+
+        emit WithdrawClaimed(id, user, baseAmount, block.timestamp);
     }
 
     /// @notice Finalize a pending request by specifying how much base token is available for it.

@@ -56,7 +56,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
             string(abi.encodePacked("ws", tokenName)), string(abi.encodePacked("ws", tokenSymbol)), underlyingToken_
         );
 
-        withdrawManager = new Withdraw(address(sToken), address(wsToken), address(this), 4 days);
+        withdrawManager = new Withdraw(address(sToken), underlyingToken_, address(this), 4 days);
 
         // Set this contract as authorized minter for the sToken
         sToken.setAuthorizedMinter(address(this), true);
@@ -145,27 +145,35 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     /**
      * @dev Universal withdraw function for any supported token
      */
-    function withdraw(address token, uint256 amount) external {
+    function withdraw(address token, uint256 amount) external nonReentrant {
         if (amount == 0) revert AmountMustBeGreaterThanZero();
         if (!supportedTokens[token]) revert TokenNotSupported();
-        if (tokenBalances[token] < amount) revert InsufficientBalance();
         if (sToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
-        // require withdrawManager to be set
-        if (address(withdrawManager) == address(0)) revert TransferFailed();
-
-        // Update token balance
-        tokenBalances[token] -= amount;
-
-        // Burn user's sToken (SuperCluster authorized as minter/burner)
+        // Burn user's sToken
         sToken.burn(msg.sender, amount);
 
         // Update AUM after burn
         sToken.updateAssetsUnderManagement(sToken.totalSupply());
 
-        // Notify withdraw manager once (it will create request)
-        withdrawManager.autoRequest(msg.sender, amount);
+        // make request withdraw in WithdrawManager
+        uint256 requestId = withdrawManager.autoRequest(msg.sender, amount);
 
+        // choose pilot for this token (you can create token->pilot mapping if multi-pilot)
+        address selectedPilot = pilots[0]; // sementara ambil pilot pertama
+        require(registeredPilots[selectedPilot], "Pilot not registered");
+
+        // withdraw funds from Pilot to WithdrawManager
+        IPilot(selectedPilot).withdrawToManager(address(withdrawManager), amount);
+
+        // finalize withdraw after funds received
+        uint256 baseBalance = withdrawManager.contractBaseBalance();
+
+        uint256 totalAUM = calculateTotalAUM();
+        sToken.updateAssetsUnderManagement(totalAUM);
+        // finalize using the actual base token balance available in the Withdraw contract
+        // (baseAmount must reflect base tokens available for this request)
+        withdrawManager.finalizeWithdraw(requestId, baseBalance);
         emit TokenWithdrawn(token, msg.sender, amount);
     }
 
