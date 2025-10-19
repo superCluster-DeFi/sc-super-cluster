@@ -56,7 +56,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
             string(abi.encodePacked("ws", tokenName)), string(abi.encodePacked("ws", tokenSymbol)), underlyingToken_
         );
 
-        withdrawManager = new Withdraw(address(sToken), underlyingToken_, address(this), 4 days);
+        withdrawManager = new Withdraw(address(sToken), underlyingToken_, address(this), 0);
 
         // Set this contract as authorized minter for the sToken
         sToken.setAuthorizedMinter(address(this), true);
