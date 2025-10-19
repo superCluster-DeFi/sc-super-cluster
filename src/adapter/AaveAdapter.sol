@@ -15,7 +15,7 @@ contract AaveAdapter is Adapter {
     }
 
     /**
-     * @dev ✅ DEPOSIT: Supply to MockAave
+     * @dev DEPOSIT: Supply to MockAave
      */
     function deposit(uint256 amount) external override onlyActive returns (uint256 shares) {
         if (amount == 0) revert InvalidAmount();
@@ -42,23 +42,52 @@ contract AaveAdapter is Adapter {
     }
 
     /**
-     * @dev ✅ WITHDRAW: Withdraw from MockAave
+     * @dev WITHDRAW: Withdraw from MockAave
      */
-    function withdraw(uint256 shares) external override onlyActive returns (uint256 amount) {
-        if (shares == 0) revert InvalidAmount();
+    function withdrawTo(address to, uint256 amount) external override onlyActive returns (uint256) {
+        if (amount == 0) revert InvalidAmount();
 
-        // Check current shares
+        uint256 shares = convertToShares(amount);
         uint256 currentShares = LENDINGPOOL.getUserSupplyShares(address(this));
 
         if (currentShares < shares) revert InsufficientBalance();
 
-        // Get current balance before withdraw
+        //save current balance
         uint256 balanceBefore = IERC20(TOKEN).balanceOf(address(this));
 
-        // Withdraw from MockAave - this transfers tokens to this contract
+        // withdraw from MockAave - this will emit Withdraw event
         LENDINGPOOL.withdraw(shares);
 
-        // Calculate actual amount received
+        // update balance
+        uint256 balanceAfter = IERC20(TOKEN).balanceOf(address(this));
+        uint256 withdrawnAmount = balanceAfter - balanceBefore;
+
+        // Transfer to caller
+        bool status = IERC20(TOKEN).transfer(to, withdrawnAmount);
+        require(status, "Transfer failed");
+
+        // Update tracking
+        _updateTotalDeposited(withdrawnAmount, false);
+
+        emit Withdrawn(withdrawnAmount);
+    }
+
+    /**
+     * @dev WITHDRAW: Basic withdrawal to msg.sender
+     */
+    function withdraw(uint256 shares) external override onlyActive returns (uint256 amount) {
+        if (shares == 0) revert InvalidAmount();
+
+        uint256 currentShares = LENDINGPOOL.getUserSupplyShares(address(this));
+        if (currentShares < shares) revert InsufficientBalance();
+
+        // Get balance before
+        uint256 balanceBefore = IERC20(TOKEN).balanceOf(address(this));
+
+        // Withdraw from protocol
+        LENDINGPOOL.withdraw(shares);
+
+        // Calculate received amount
         uint256 balanceAfter = IERC20(TOKEN).balanceOf(address(this));
         amount = balanceAfter - balanceBefore;
 
@@ -74,23 +103,23 @@ contract AaveAdapter is Adapter {
     }
 
     /**
-     * @dev ✅ GET BALANCE: Get current supply balance in assets
+     * @dev GET BALANCE: Get current supply balance in assets
      */
     function getBalance() external view override returns (uint256) {
         return LENDINGPOOL.getUserSupplyBalance(address(this));
     }
 
     /**
-     * @dev ✅ GET SUPPLY SHARES: Get raw supply shares
+     * @dev GET SUPPLY SHARES: Get raw supply shares
      */
     function getSupplyShares() external view returns (uint256) {
         return LENDINGPOOL.getUserSupplyShares(address(this));
     }
 
     /**
-     * @dev ✅ Convert assets to shares based on current exchange rate
+     * @dev Convert assets to shares based on current exchange rate
      */
-    function convertToShares(uint256 assets) external view returns (uint256) {
+    function convertToShares(uint256 assets) public view returns (uint256) {
         if (assets == 0) return 0;
 
         // Get current exchange rate from MockAave
@@ -106,9 +135,9 @@ contract AaveAdapter is Adapter {
     }
 
     /**
-     * @dev ✅ Convert shares to assets based on current exchange rate
+     * @dev Convert shares to assets based on current exchange rate
      */
-    function convertToAssets(uint256 shares) external view returns (uint256) {
+    function convertToAssets(uint256 shares) public view returns (uint256) {
         if (shares == 0) return 0;
 
         uint256 totalSupplyAssets = LENDINGPOOL.totalSupplyAssets();
@@ -157,5 +186,10 @@ contract AaveAdapter is Adapter {
      */
     function accureInterest() external {
         LENDINGPOOL.accureInterest();
+    }
+
+    function getTotalAssets() external view override returns (uint256) {
+        // Return the protocol-held supply balance for this adapter
+        return LENDINGPOOL.getUserSupplyBalance(address(this));
     }
 }

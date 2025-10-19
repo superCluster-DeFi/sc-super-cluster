@@ -4,6 +4,7 @@ pragma solidity ^0.8.13;
 import {IAdapter} from "../interfaces/IAdapter.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /**
  * @title Adapter
@@ -91,5 +92,14 @@ abstract contract Adapter is IAdapter, Ownable, ReentrancyGuard {
     function deactivate() external onlyOwner {
         isActive = false;
         emit AdapterDeactivated();
+    }
+
+    function withdrawTo(address receiver, uint256 amount) external virtual returns (uint256) {
+        require(receiver != address(0), "Invalid receiver");
+        require(amount > 0, "Invalid amount");
+
+        IERC20(TOKEN).transfer(receiver, amount);
+
+        return amount;
     }
 }

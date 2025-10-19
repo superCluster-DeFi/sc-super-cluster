@@ -281,10 +281,9 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     /**
      * @dev Get total value from all adapters + idle funds
      */
-    function getTotalValue() external view override returns (uint256) {
+    function getTotalValue() external view override returns (uint256 total) {
         uint256 totalValue = IERC20(TOKEN).balanceOf(address(this)); // Idle funds
 
-        // Add adapter balances
         for (uint256 i = 0; i < strategyAdapters.length; i++) {
             if (isActiveAdapter[strategyAdapters[i]]) {
                 totalValue += IAdapter(strategyAdapters[i]).getBalance();
@@ -292,5 +291,55 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
         }
 
         return totalValue;
+    }
+
+    function getTotalPilotHoldings() public view returns (uint256 total) {
+        total = IERC20(TOKEN).balanceOf(address(this));
+        for (uint256 i = 0; i < strategyAdapters.length; i++) {
+            address adapter = strategyAdapters[i];
+            if (!isActiveAdapter[adapter]) continue;
+            total += IAdapter(adapter).getTotalAssets();
+        }
+    }
+
+    function withdrawToManager(address withdrawManager, uint256 totalAmount) external {
+        require(msg.sender == superClusterAddress, "Only SuperCluster");
+        require(totalAmount > 0, "Invalid amount");
+        require(strategyAdapters.length > 0, "No adapter set");
+
+        uint256 remainingAmount = totalAmount;
+        uint256 totalHoldings = getTotalPilotHoldings();
+        require(totalHoldings > 0, "Zero holdings");
+
+        console.log("=== Pilot.withdrawToManager ===");
+        console.log("totalAmount:", totalAmount);
+        console.log("totalHoldings:", totalHoldings);
+
+        for (uint256 i = 0; i < strategyAdapters.length; i++) {
+            address adapter = strategyAdapters[i];
+            if (!isActiveAdapter[adapter]) continue;
+
+            uint256 adapterBalance = IAdapter(adapter).getTotalAssets();
+            if (adapterBalance == 0) continue;
+
+            uint256 adapterAmount = (adapterBalance * totalAmount) / totalHoldings;
+
+            if (adapterAmount > adapterBalance) {
+                adapterAmount = adapterBalance;
+            }
+
+            if (adapterAmount > remainingAmount) {
+                adapterAmount = remainingAmount;
+            }
+
+            console.log("Adapter:", adapter);
+            console.log("Adapter balance:", adapterBalance);
+            console.log("Withdraw amount for adapter:", adapterAmount);
+
+            IAdapter(adapter).withdrawTo(withdrawManager, adapterAmount);
+
+            remainingAmount -= adapterAmount;
+            if (remainingAmount == 0) break;
+        }
     }
 }
