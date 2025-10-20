@@ -28,7 +28,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     // Events
     event PilotRegistered(address indexed pilot);
     event TokenDeposited(address indexed token, address indexed user, uint256 amount);
-    event TokenWithdrawn(address indexed token, address indexed user, uint256 amount);
+    event TokenWithdrawn(address indexed token, address indexed user, uint256 amount, uint256 requestId);
     event TokenSupported(address indexed token, bool supported);
     event PilotSelected(address indexed pilot, address indexed token, uint256 amount);
 
@@ -56,6 +56,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
             string(abi.encodePacked("ws", tokenName)), string(abi.encodePacked("ws", tokenSymbol)), underlyingToken_
         );
 
+        // Delay Withdraw
         withdrawManager = new Withdraw(address(sToken), underlyingToken_, address(this), 0);
 
         // Set this contract as authorized minter for the sToken
@@ -153,28 +154,28 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         // Burn user's sToken
         sToken.burn(msg.sender, amount);
 
-        // Update AUM after burn
+        // Update AUM setelah burn
         sToken.updateAssetsUnderManagement(sToken.totalSupply());
 
-        // make request withdraw in WithdrawManager
+        // Buat request withdraw di WithdrawManager
         uint256 requestId = withdrawManager.autoRequest(msg.sender, amount);
 
-        // choose pilot for this token (you can create token->pilot mapping if multi-pilot)
-        address selectedPilot = pilots[0]; // sementara ambil pilot pertama
-        require(registeredPilots[selectedPilot], "Pilot not registered");
+        emit TokenWithdrawn(token, msg.sender, amount, requestId);
+    }
 
-        // withdraw funds from Pilot to WithdrawManager
-        IPilot(selectedPilot).withdrawToManager(address(withdrawManager), amount);
+    function finalizeWithdraw(uint256 requestId, uint256 baseAmount) external onlyOwner nonReentrant {
+        uint256 managerBalance = withdrawManager.contractBaseBalance();
+        require(managerBalance >= baseAmount, "WithdrawManager: insufficient base balance");
 
-        // finalize withdraw after funds received
-        uint256 baseBalance = withdrawManager.contractBaseBalance();
+        withdrawManager.finalizeWithdraw(requestId, baseAmount);
 
         uint256 totalAUM = calculateTotalAUM();
         sToken.updateAssetsUnderManagement(totalAUM);
-        // finalize using the actual base token balance available in the Withdraw contract
-        // (baseAmount must reflect base tokens available for this request)
-        withdrawManager.finalizeWithdraw(requestId, baseBalance);
-        emit TokenWithdrawn(token, msg.sender, amount);
+    }
+
+    // call function in withdraw manager to claim withdrawn tokens
+    function claim(uint256 requestId) external nonReentrant {
+        withdrawManager.claim(requestId);
     }
 
     /**

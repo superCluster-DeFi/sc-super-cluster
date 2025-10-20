@@ -144,15 +144,11 @@ contract Withdraw is Ownable {
         r.sAmount = sAmount;
         r.baseAmount = baseAmount;
         r.requestedAt = block.timestamp;
-        r.availableAt = block.timestamp;
         r.finalized = true;
-        r.claimed = true;
+        r.claimed = false; // allow claim by user
+        r.availableAt = block.timestamp + withdrawDelay; // respect delay
 
-        // burn sToken dan transfer base token
-        try ISToken(address(sToken)).burn(address(this), sAmount) {} catch {}
-        baseToken.safeTransfer(user, baseAmount);
-
-        emit WithdrawClaimed(id, user, baseAmount, block.timestamp);
+        emit WithdrawFinalized(id, baseAmount, r.availableAt, block.timestamp);
     }
 
     /// @notice Finalize a pending request by specifying how much base token is available for it.
@@ -210,7 +206,10 @@ contract Withdraw is Ownable {
         require(!r.claimed, "Already claimed");
         require(r.finalized, "Not finalized yet");
         require(block.timestamp >= r.availableAt, "Not available yet");
-        require(msg.sender == r.user, "Not request owner");
+
+        if (msg.sender != r.user && msg.sender != owner()) {
+            revert("Not request owner");
+        }
 
         uint256 baseAmount = r.baseAmount;
         require(baseAmount > 0, "Zero base amount");
@@ -218,16 +217,13 @@ contract Withdraw is Ownable {
         // mark claimed before external transfer to avoid reentrancy
         r.claimed = true;
 
-        // Burn held sToken to update SToken state (requires this contract to be authorized minter)
-        // If burn call fails (not authorized), we still proceed but sTokens remain in this contract;
-        // it's recommended to set this contract as authorized minter on SToken so burn reduces total AUM.
+        // Burn held sToken for update AUM
         try ISToken(address(sToken)).burn(address(this), r.sAmount) {
             // burned successfully
         } catch {
-            // ignore: fallback to not burning if not allowed
+            // ignore burn failure
         }
 
-        // Transfer base token to user
         baseToken.safeTransfer(r.user, baseAmount);
 
         emit WithdrawClaimed(id, r.user, baseAmount, block.timestamp);
