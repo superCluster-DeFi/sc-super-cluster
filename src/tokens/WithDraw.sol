@@ -86,6 +86,8 @@ contract Withdraw is Ownable {
         r.availableAt = 0;
         r.baseAmount = 0;
 
+        r.baseAmount = sAmount;
+
         emit WithdrawRequested(id, msg.sender, sAmount, block.timestamp);
         return id;
     }
@@ -103,6 +105,8 @@ contract Withdraw is Ownable {
         r.claimed = false;
         r.availableAt = 0;
         r.baseAmount = 0;
+
+        r.baseAmount = sAmount;
 
         emit WithdrawRequested(id, user, sAmount, block.timestamp);
         return id;
@@ -137,7 +141,16 @@ contract Withdraw is Ownable {
     function processWithdraw(address user, uint256 sAmount, uint256 baseAmount) external onlyOwner {
         require(user != address(0), "Invalid user");
         require(baseAmount > 0 && sAmount > 0, "Zero amount");
+        require(baseToken.balanceOf(address(this)) >= baseAmount, "Insufficient base balance");
 
+        // transfer sToken dari user ke contract, lalu burn
+        sToken.transferFrom(user, address(this), sAmount);
+        sToken.burn(address(this), sAmount);
+
+        // kirim base token ke user
+        baseToken.transfer(user, baseAmount);
+
+        // record request
         uint256 id = nextRequestId++;
         Request storage r = requests[id];
         r.user = user;
@@ -145,10 +158,10 @@ contract Withdraw is Ownable {
         r.baseAmount = baseAmount;
         r.requestedAt = block.timestamp;
         r.finalized = true;
-        r.claimed = false; // allow claim by user
-        r.availableAt = block.timestamp + withdrawDelay; // respect delay
+        r.claimed = true;
+        r.availableAt = block.timestamp;
 
-        emit WithdrawFinalized(id, baseAmount, r.availableAt, block.timestamp);
+        emit WithdrawClaimed(id, user, baseAmount, block.timestamp);
     }
 
     /// @notice Finalize a pending request by specifying how much base token is available for it.
@@ -216,13 +229,6 @@ contract Withdraw is Ownable {
 
         // mark claimed before external transfer to avoid reentrancy
         r.claimed = true;
-
-        // Burn held sToken for update AUM
-        try ISToken(address(sToken)).burn(address(this), r.sAmount) {
-            // burned successfully
-        } catch {
-            // ignore burn failure
-        }
 
         baseToken.safeTransfer(r.user, baseAmount);
 
