@@ -1,7 +1,6 @@
 [profile.default]
 src = "src"
 out = "out"
-libs = ["lib"]
 
 [rpc_endpoints]
 base-sepolia = "${BASE_SEPOLIA_RPC_URL}"

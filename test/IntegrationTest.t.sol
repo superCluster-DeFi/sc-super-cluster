@@ -34,13 +34,19 @@ contract IntegrationTest is SuperClusterTest {
 
         // Trigger rebase
         vm.warp(block.timestamp + 1 days);
-        idrx.mint(address(pilot), 100e18); // Simulate some yield in pilot
+        idrx.approve(address(superCluster), 100e18);
+        idrx.transfer(address(superCluster), 100e18);
+        superCluster.receiveAndInvest(address(pilot), address(idrx), 100e18);
         superCluster.rebase();
         console.log("Rebase completed");
 
         // Simulate yield and rebase again
-        idrx.mint(address(pilot), 100e18); // 10% yield on Aave
-        idrx.mint(address(pilot), 50e18); // 5% yield on Morpho
+        idrx.approve(address(superCluster), 100e18);
+        idrx.transfer(address(superCluster), 100e18);
+        superCluster.receiveAndInvest(address(pilot), address(idrx), 100e18);
+        idrx.approve(address(superCluster), 50e18);
+        idrx.transfer(address(superCluster), 50e18);
+        superCluster.receiveAndInvest(address(pilot), address(idrx), 50e18);
 
         vm.warp(block.timestamp + 1 days);
         superCluster.rebase();
@@ -52,23 +58,26 @@ contract IntegrationTest is SuperClusterTest {
 
         uint256 idrxBeforeWithdraw = idrx.balanceOf(user1);
 
+        Withdraw withdrawManager = Withdraw(superCluster.withdrawManager());
+        console.log("Balance IDRX WithdrawManager before finalize:", idrx.balanceOf(address(withdrawManager)));
+
         // --- Withdraw flow ---
         vm.startPrank(user1);
-        superCluster.withdraw(address(idrx), newSTokenBalance);
+        superCluster.withdraw(address(pilot), address(idrx), newSTokenBalance);
         vm.stopPrank();
-
-        Withdraw withdrawManager = Withdraw(superCluster.withdrawManager());
 
         // Fund WithdrawManager with enough IDRX for the withdrawal (including yield)
         vm.prank(owner);
-        idrx.transfer(address(withdrawManager), newSTokenBalance);
+        idrx.approve(address(superCluster), newSTokenBalance);
+        idrx.transfer(address(superCluster), newSTokenBalance);
+        superCluster.receiveAndInvest(address(pilot), address(idrx), newSTokenBalance);
         console.log("WithdrawManager balance after transfer:", idrx.balanceOf(address(withdrawManager)));
 
         // Get latest requestId for user1
         uint256 requestId = withdrawManager.nextRequestId() - 1;
 
-        // Finalize and claim
-        superCluster.finalizeWithdraw(requestId, newSTokenBalance);
+        // Claim
+        vm.warp(block.timestamp + 4 days);
         superCluster.claim(requestId);
 
         uint256 sTokenAfterWithdraw = sToken.balanceOf(user1);
@@ -102,8 +111,10 @@ contract IntegrationTest is SuperClusterTest {
         uint256 user1Balance = sToken.balanceOf(user1);
         assertEq(user1Balance, depositAmount1, "User1 balance should be 1:1 on first deposit");
 
-        // Simulate yield: add yield to Aave
-        idrx.mint(address(pilot), 150e18); // 15% yield
+        // Simulate yield
+        idrx.approve(address(superCluster), 150e18);
+        idrx.transfer(address(superCluster), 150e18);
+        superCluster.receiveAndInvest(address(pilot), address(idrx), 150e18);
 
         // Rebase after yield
         vm.warp(block.timestamp + 1 days);
@@ -134,7 +145,9 @@ contract IntegrationTest is SuperClusterTest {
         console.log("User2 sToken balance:", balance2);
 
         // Simulate another yield
-        idrx.mint(address(pilot), 200e18); // Additional yield
+        idrx.approve(address(superCluster), 200e18);
+        idrx.transfer(address(superCluster), 200e18);
+        superCluster.receiveAndInvest(address(pilot), address(idrx), 200e18);
 
         // Rebase again
         vm.warp(block.timestamp + 1 days);
@@ -151,10 +164,10 @@ contract IntegrationTest is SuperClusterTest {
 
         // Withdraw both users
         vm.startPrank(user1);
-        superCluster.withdraw(address(idrx), newBalance1);
+        superCluster.withdraw(address(pilot), address(idrx), newBalance1);
         vm.stopPrank();
         vm.startPrank(user2);
-        superCluster.withdraw(address(idrx), newBalance2);
+        superCluster.withdraw(address(pilot), address(idrx), newBalance2);
         vm.stopPrank();
 
         assertEq(sToken.balanceOf(user1), 0, "User1 sToken should be zero after withdraw");
@@ -317,7 +330,10 @@ contract IntegrationTest is SuperClusterTest {
         vm.stopPrank();
 
         // Simulate yield: add yield to pilot and rebase
-        idrx.mint(address(pilot), 300e18); // 10% yield for both users
+        idrx.approve(address(superCluster), 300e18);
+        idrx.transfer(address(superCluster), 300e18);
+        superCluster.receiveAndInvest(address(pilot), address(idrx), 300e18);
+
         vm.warp(block.timestamp + 1 days);
         superCluster.rebase();
 
@@ -353,25 +369,26 @@ contract IntegrationTest is SuperClusterTest {
         assertApproxEqRel(actualRatio, expectedRatio, 1e16); // 1% tolerance
 
         console.log("User1 sToken after unwrap:", sTokenAfterUnwrap1);
-        console.log("User2 sToken after unwrap:", sTokenAfterUnwrap2);
 
         vm.startPrank(user1);
         console.log("Balance before withdraw:", idrx.balanceOf(user1));
 
-        superCluster.withdraw(address(idrx), sTokenAfterUnwrap1);
+        superCluster.withdraw(address(pilot), address(idrx), sTokenAfterUnwrap1);
         vm.stopPrank();
 
-        vm.warp(1 days);
+        vm.warp(block.timestamp + 4 days);
         uint256 balanceIdrxBeforeWithdraw = idrx.balanceOf(user1);
         console.log("Balance idx user before withdraw:", balanceIdrxBeforeWithdraw);
         vm.prank(owner);
         Withdraw withdrawManager = Withdraw(superCluster.withdrawManager());
-        idrx.transfer(address(withdrawManager), sTokenAfterUnwrap1);
+        idrx.approve(address(superCluster), sTokenAfterUnwrap1);
+        idrx.transfer(address(superCluster), sTokenAfterUnwrap1);
+        superCluster.receiveAndInvest(address(pilot), address(idrx), sTokenAfterUnwrap1);
 
         console.log("Balance manager transfer", idrx.balanceOf(address(withdrawManager)));
         console.log("Widraw Manager amount:", sTokenAfterUnwrap1);
         uint256 requestId = withdrawManager.nextRequestId() - 1;
-        superCluster.finalizeWithdraw(requestId, sTokenAfterUnwrap1);
+
         superCluster.claim(requestId);
 
         uint256 sTokenAfterWithdraw1 = sToken.balanceOf(user1);
@@ -390,20 +407,24 @@ contract IntegrationTest is SuperClusterTest {
 
         vm.startPrank(user2);
         console.log("Balance before withdraw:", idrx.balanceOf(user2));
+        console.log("Withdrawing sToken amount:", sTokenAfterUnwrap2);
 
-        superCluster.withdraw(address(idrx), sTokenAfterUnwrap2);
+        superCluster.withdraw(address(pilot), address(idrx), sTokenAfterUnwrap2);
         vm.stopPrank();
 
-        vm.warp(1 days);
+        vm.warp(block.timestamp + 4 days);
         uint256 balanceIdrxBeforeWithdraw2 = idrx.balanceOf(user2);
         console.log("Balance idx user before withdraw:", balanceIdrxBeforeWithdraw2);
-        vm.prank(owner);
-        idrx.transfer(address(withdrawManager), sTokenAfterUnwrap2);
+
+        idrx.transfer(address(superCluster), sTokenAfterUnwrap2);
+        superCluster.receiveAndInvest(address(pilot), address(idrx), sTokenAfterUnwrap2);
 
         console.log("Balance manager transfer", idrx.balanceOf(address(withdrawManager)));
         console.log("Widraw Manager amount:", sTokenAfterUnwrap2);
         requestId = withdrawManager.nextRequestId() - 1;
-        superCluster.finalizeWithdraw(requestId, sTokenAfterUnwrap2);
+        console.log("Balance stoken before withdraw:", sToken.balanceOf(user2));
+        console.log("Stoken to withdraw:", sTokenAfterUnwrap2);
+
         superCluster.claim(requestId);
 
         uint256 sTokenAfterWithdraw2 = sToken.balanceOf(user2);
@@ -421,5 +442,56 @@ contract IntegrationTest is SuperClusterTest {
         );
 
         console.log("Multiple users wrap/unwrap with rebasing yield test complete");
+    }
+
+    function test_flow_to_widraw() public {
+        vm.startPrank(user1);
+        idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
+        uint256 idrxBeforeDeposit = idrx.balanceOf(user1);
+        superCluster.deposit(address(pilot), address(idrx), DEPOSIT_AMOUNT);
+
+        uint256 sTokenBalance = sToken.balanceOf(user1);
+        assertEq(sTokenBalance, DEPOSIT_AMOUNT);
+        console.log("User deposited and received sTokens");
+        vm.stopPrank();
+
+        // Check adapter balances
+        uint256 aaveBalance = aaveAdapter.getBalance();
+        uint256 morphoBalance = morphoAdapter.getBalance();
+
+        assertGt(aaveBalance, 0);
+        assertGt(morphoBalance, 0);
+        console.log("Pilot invested in adapters");
+        console.log("Aave balance:", aaveBalance);
+        console.log("Morpho balance:", morphoBalance);
+
+        // Check total AUM calculation
+        uint256 totalAUM = superCluster.calculateTotalAUM();
+        assertGt(totalAUM, 0);
+        console.log("Total AUM calculated:", totalAUM);
+
+        vm.startPrank(user1);
+        superCluster.withdraw(address(pilot), address(idrx), sTokenBalance);
+        vm.stopPrank();
+
+        uint256 balanceInWithdrawManager = idrx.balanceOf(address(superCluster.withdrawManager()));
+
+        assertEq(balanceInWithdrawManager, DEPOSIT_AMOUNT, "WithdrawManager should have the withdrawn amount");
+
+        Withdraw withdrawManager = Withdraw(superCluster.withdrawManager());
+
+        vm.prank(user1);
+        uint256[] memory myRequests = withdrawManager.getRequestsOf(address(user1));
+
+        require(myRequests.length > 0, "No withdraw requests for user1");
+        console.log("User1 withdraw requests:", myRequests[0]);
+
+        vm.startPrank(user1);
+        vm.warp(1 days);
+        superCluster.claim(myRequests[0]);
+        vm.stopPrank();
+
+        uint256 idrxAfterWithdraw = idrx.balanceOf(user1);
+        assertEq(idrxBeforeDeposit, idrxAfterWithdraw, "User1 should receive IDRX equal to sToken withdrawn");
     }
 }

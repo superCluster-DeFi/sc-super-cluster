@@ -29,9 +29,6 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     /// @notice Mapping of supported base tokens
     mapping(address => bool) public supportedTokens;
 
-    /// @notice Mapping of token balances (unused, for future extension)
-    mapping(address => uint256) public tokenBalances;
-
     /// @notice Wrapped sToken (non-rebasing, ERC20-compatible)
     WsToken public wsToken;
 
@@ -49,10 +46,9 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     event TokenDeposited(address indexed token, address indexed user, uint256 amount);
 
     /// @notice Emitted when a user withdraws tokens
-    event TokenWithdrawn(address indexed token, address indexed user, uint256 amount, uint256 requestId);
-
-    /// @notice Emitted when a token is marked as supported/unsupported
-    event TokenSupported(address indexed token, bool supported);
+    event TokenWithdrawn(
+        address indexed pilot, address indexed token, address indexed user, uint256 amount, uint256 requestId
+    );
 
     /// @notice Emitted when a pilot is selected for a deposit
     event PilotSelected(address indexed pilot, address indexed token, uint256 amount);
@@ -60,9 +56,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     // --- Errors ---
 
     error PilotNotRegistered();
-    error PilotAlreadyRegistered();
     error InsufficientBalance();
-    error TransferFailed();
     error TokenNotSupported();
     error AmountMustBeGreaterThanZero();
 
@@ -89,24 +83,6 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         wsToken.setAuthorizedMinter(address(this), true);
 
         supportedTokens[underlyingToken_] = true;
-    }
-
-    /**
-     * @dev Internally wraps sToken to wsToken for a user.
-     * @param user The user address to receive wsToken.
-     * @param sAmount The amount of sToken to wrap.
-     */
-    function autoWrap(address user, uint256 sAmount) internal {
-        uint256 beforeBalance = wsToken.balanceOf(address(this));
-
-        IERC20(address(sToken)).approve(address(wsToken), sAmount);
-
-        wsToken.wrap(sAmount);
-
-        uint256 afterBalance = wsToken.balanceOf(address(this));
-        uint256 minted = afterBalance - beforeBalance;
-
-        IERC20(wsToken).safeTransfer(user, minted);
     }
 
     /**
@@ -162,21 +138,31 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Request withdrawal of base tokens by burning sToken.
-     * @param token The base token address.
-     * @param amount The amount to withdraw.
-     * @dev Creates a withdrawal request in WithdrawManager.
+     * @notice Request withdrawal of base tokens by burning sToken and initiating withdrawal flow.
+     * @dev
+     * - Checks user balance and token/pilot validity.
+     * - Burns user's sToken.
+     * - Instructs the pilot to transfer base tokens to the WithdrawManager.
+     * - Creates a withdrawal request in WithdrawManager for the user.
+     * - Immediately finalizes the withdrawal request (no delay).
+     * - Emits TokenWithdrawn event.
+     * @param pilot The address of the pilot strategy to withdraw from.
+     * @param token The base token address to withdraw.
+     * @param amount The amount of sToken to burn and withdraw (in base token units).
      */
-    function withdraw(address token, uint256 amount) external nonReentrant {
+    function withdraw(address pilot, address token, uint256 amount) external nonReentrant {
         if (amount == 0) revert AmountMustBeGreaterThanZero();
         if (!supportedTokens[token]) revert TokenNotSupported();
+        if (!registeredPilots[pilot]) revert PilotNotRegistered();
         if (sToken.balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
         sToken.burn(msg.sender, amount);
 
+        IPilot(pilot).withdrawToManager(address(withdrawManager), amount);
         uint256 requestId = withdrawManager.autoRequest(msg.sender, amount);
+        withdrawManager.finalizeWithdraw(requestId, amount);
 
-        emit TokenWithdrawn(token, msg.sender, amount, requestId);
+        emit TokenWithdrawn(pilot, token, msg.sender, amount, requestId);
     }
 
     /**
@@ -255,5 +241,22 @@ contract SuperCluster is Ownable, ReentrancyGuard {
     function setWithdrawManager(address _manager) external onlyOwner {
         require(_manager != address(0), "Zero manager");
         withdrawManager = Withdraw(_manager);
+    }
+
+    /**
+     * @notice Receive base tokens and invest via pilot (called by pilots).
+     * @param pilot The pilot address.
+     * @param token The base token address.
+     * @param amount The amount to receive and invest.
+     * @dev Only callable by owner (pilots).
+     */
+    function receiveAndInvest(address pilot, address token, uint256 amount) external onlyOwner {
+        if (amount == 0) revert AmountMustBeGreaterThanZero();
+        if (!supportedTokens[token]) revert TokenNotSupported();
+        if (!registeredPilots[pilot]) revert PilotNotRegistered();
+        if (IERC20(token).balanceOf(msg.sender) < amount) revert InsufficientBalance();
+
+        IERC20(token).approve(pilot, amount);
+        IPilot(pilot).receiveAndInvest(amount);
     }
 }

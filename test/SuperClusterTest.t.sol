@@ -173,7 +173,7 @@ contract SuperClusterTest is Test {
         // === STEP 2: Withdraw Request ===
         vm.startPrank(user1);
         console.log("Requesting withdraw of", DEPOSIT_AMOUNT, "IDRX...");
-        superCluster.withdraw(address(idrx), DEPOSIT_AMOUNT);
+        superCluster.withdraw(address(pilot), address(idrx), DEPOSIT_AMOUNT);
         vm.stopPrank();
 
         // check pending withdraw
@@ -188,9 +188,6 @@ contract SuperClusterTest is Test {
         // === STEP 4: Finalize withdraw (by SuperCluster) ===
         // fund withdrawManager first
         idrx.transfer(address(withdrawManager), DEPOSIT_AMOUNT);
-
-        vm.prank(address(superCluster));
-        withdrawManager.finalizeWithdraw(1, DEPOSIT_AMOUNT);
 
         console.log("Withdraw finalized. WithdrawManager IDRX balance:", idrx.balanceOf(address(withdrawManager)));
 
@@ -224,16 +221,12 @@ contract SuperClusterTest is Test {
 
         // Withdraw
         vm.startPrank(user1);
-        superCluster.withdraw(address(idrx), DEPOSIT_AMOUNT);
+        superCluster.withdraw(address(pilot), address(idrx), DEPOSIT_AMOUNT);
         vm.stopPrank();
 
         // Fund withdraw manager
         Withdraw withdrawManager = Withdraw(superCluster.withdrawManager());
         idrx.transfer(address(withdrawManager), DEPOSIT_AMOUNT);
-
-        // Finalize (by SuperCluster)
-        vm.prank(address(superCluster));
-        withdrawManager.finalizeWithdraw(1, DEPOSIT_AMOUNT); // or correct ID
 
         // Warp time
         vm.warp(block.timestamp + 1 days);
