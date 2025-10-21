@@ -5,7 +5,6 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
 import {ISToken} from "../interfaces/ISToken.sol";
-import {console} from "forge-std/console.sol";
 
 /**
  * @title WithdrawManager
@@ -262,8 +261,6 @@ contract Withdraw is Ownable {
         require(!r.finalized, "Already finalized");
         require(!r.claimed, "Already claimed");
         require(baseAmount > 0, "Zero base amount");
-
-        console.log(baseToken.balanceOf(address(this)));
 
         // Basic safety: ensure contract has enough base tokens to cover
         require(baseToken.balanceOf(address(this)) >= baseAmount, "Insufficient base funds");

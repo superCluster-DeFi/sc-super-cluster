@@ -197,7 +197,7 @@ contract SuperClusterTest is Test {
         // === STEP 6: User claim ===
         uint256 idrxBeforeClaim = idrx.balanceOf(user1);
         vm.startPrank(user1);
-        superCluster.claim(1);
+        withdrawManager.claim(1);
         vm.stopPrank();
 
         uint256 idrxAfterClaim = idrx.balanceOf(user1);
@@ -233,7 +233,7 @@ contract SuperClusterTest is Test {
 
         // Claim
         vm.prank(user1);
-        superCluster.claim(1);
+        withdrawManager.claim(1);
 
         // Assert
         uint256 userBalanceAfter = idrx.balanceOf(user1);

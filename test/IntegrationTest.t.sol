@@ -78,7 +78,8 @@ contract IntegrationTest is SuperClusterTest {
 
         // Claim
         vm.warp(block.timestamp + 4 days);
-        superCluster.claim(requestId);
+        vm.prank(user1);
+        withdrawManager.claim(requestId);
 
         uint256 sTokenAfterWithdraw = sToken.balanceOf(user1);
         assertEq(sTokenAfterWithdraw, 0, "User sToken should be zero after withdraw");
@@ -389,7 +390,8 @@ contract IntegrationTest is SuperClusterTest {
         console.log("Widraw Manager amount:", sTokenAfterUnwrap1);
         uint256 requestId = withdrawManager.nextRequestId() - 1;
 
-        superCluster.claim(requestId);
+        vm.prank(user1);
+        withdrawManager.claim(requestId);
 
         uint256 sTokenAfterWithdraw1 = sToken.balanceOf(user1);
         console.log("User1 sToken after withdraw:", sTokenAfterWithdraw1);
@@ -425,7 +427,7 @@ contract IntegrationTest is SuperClusterTest {
         console.log("Balance stoken before withdraw:", sToken.balanceOf(user2));
         console.log("Stoken to withdraw:", sTokenAfterUnwrap2);
 
-        superCluster.claim(requestId);
+        withdrawManager.claim(requestId);
 
         uint256 sTokenAfterWithdraw2 = sToken.balanceOf(user2);
         console.log("User1 sToken after withdraw:", sTokenAfterWithdraw2);
@@ -488,7 +490,7 @@ contract IntegrationTest is SuperClusterTest {
 
         vm.startPrank(user1);
         vm.warp(1 days);
-        superCluster.claim(myRequests[0]);
+        withdrawManager.claim(myRequests[0]);
         vm.stopPrank();
 
         uint256 idrxAfterWithdraw = idrx.balanceOf(user1);

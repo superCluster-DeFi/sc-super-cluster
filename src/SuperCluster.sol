@@ -139,13 +139,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
 
     /**
      * @notice Request withdrawal of base tokens by burning sToken and initiating withdrawal flow.
-     * @dev
-     * - Checks user balance and token/pilot validity.
-     * - Burns user's sToken.
-     * - Instructs the pilot to transfer base tokens to the WithdrawManager.
-     * - Creates a withdrawal request in WithdrawManager for the user.
-     * - Immediately finalizes the withdrawal request (no delay).
-     * - Emits TokenWithdrawn event.
+     * @dev Checks user balance and token/pilot validity, Burns user's sToken, Instructs the pilot to transfer base tokens to the WithdrawManager, Creates a withdrawal request in WithdrawManager for the user, Immediately finalizes the withdrawal request (no delay).
      * @param pilot The address of the pilot strategy to withdraw from.
      * @param token The base token address to withdraw.
      * @param amount The amount of sToken to burn and withdraw (in base token units).
@@ -199,14 +193,6 @@ contract SuperCluster is Ownable, ReentrancyGuard {
             withdrawManager.getWithdrawInfo(requestId);
 
         return (requestId, user_, baseAmount_, finalized_, claimed_, availableAt_);
-    }
-
-    /**
-     * @notice Claim withdrawn base tokens after finalization.
-     * @param requestId The withdrawal request ID.
-     */
-    function claim(uint256 requestId) external nonReentrant {
-        withdrawManager.claim(requestId);
     }
 
     /**
