@@ -173,6 +173,20 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         sToken.updateAssetsUnderManagement(totalAUM);
     }
 
+    // call function in withdraw manager to inform withdraw is ready
+    function informWithdraw(uint256 requestId)
+        external
+        nonReentrant
+        returns (uint256 id, address user, uint256 baseAmount, bool finalized, bool claimed, uint256 availableAt)
+    {
+        withdrawManager.informWithdraw(requestId);
+
+        (address user_,, uint256 baseAmount_, bool finalized_, bool claimed_, uint256 availableAt_) =
+            withdrawManager.getWithdrawInfo(requestId);
+
+        return (requestId, user_, baseAmount_, finalized_, claimed_, availableAt_);
+    }
+
     // call function in withdraw manager to claim withdrawn tokens
     function claim(uint256 requestId) external nonReentrant {
         withdrawManager.claim(requestId);

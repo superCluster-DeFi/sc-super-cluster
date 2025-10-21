@@ -47,6 +47,7 @@ contract Withdraw is Ownable {
     event WithdrawClaimed(uint256 indexed id, address indexed user, uint256 baseAmount, uint256 timestamp);
     event Funded(address indexed sender, uint256 amount, uint256 balance);
     event RequestCancelled(uint256 indexed id, address indexed user, uint256 sAmount);
+    event WithdrawInformed(uint256 indexed id, address indexed user, uint256 baseAmount, uint256 timestamp);
 
     constructor(address _sToken, address _baseToken, address _superCluster, uint256 _withdrawDelay)
         Ownable(msg.sender)
@@ -57,6 +58,25 @@ contract Withdraw is Ownable {
         superCluster = _superCluster;
         withdrawDelay = _withdrawDelay;
         nextRequestId = 1;
+    }
+
+    function informWithdraw(uint256 id) external onlyOwner {
+        Request storage r = requests[id];
+        require(r.user != address(0), "Invalid request");
+        require(r.finalized, "Not finalized yet");
+        require(!r.claimed, "Already claimed");
+
+        emit WithdrawInformed(id, r.user, r.baseAmount, block.timestamp);
+    }
+
+    /// @notice Get summarized info for a withdraw request
+    function getWithdrawInfo(uint256 id)
+        external
+        view
+        returns (address user, uint256 sAmount, uint256 baseAmount, bool finalized, bool claimed, uint256 availableAt)
+    {
+        Request storage r = requests[id];
+        return (r.user, r.sAmount, r.baseAmount, r.finalized, r.claimed, r.availableAt);
     }
 
     /* ------------------------------------------------------------------------
