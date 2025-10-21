@@ -173,7 +173,7 @@ contract SuperClusterTest is Test {
         // === STEP 2: Withdraw Request ===
         vm.startPrank(user1);
         console.log("Requesting withdraw of", DEPOSIT_AMOUNT, "IDRX...");
-        superCluster.withdraw(address(idrx), DEPOSIT_AMOUNT);
+        superCluster.withdraw(address(pilot), address(idrx), DEPOSIT_AMOUNT);
         vm.stopPrank();
 
         // check pending withdraw
@@ -189,9 +189,6 @@ contract SuperClusterTest is Test {
         // fund withdrawManager first
         idrx.transfer(address(withdrawManager), DEPOSIT_AMOUNT);
 
-        vm.prank(address(superCluster));
-        withdrawManager.finalizeWithdraw(1, DEPOSIT_AMOUNT);
-
         console.log("Withdraw finalized. WithdrawManager IDRX balance:", idrx.balanceOf(address(withdrawManager)));
 
         // === STEP 5: Warp again for claim delay ===
@@ -200,7 +197,7 @@ contract SuperClusterTest is Test {
         // === STEP 6: User claim ===
         uint256 idrxBeforeClaim = idrx.balanceOf(user1);
         vm.startPrank(user1);
-        superCluster.claim(1);
+        withdrawManager.claim(1);
         vm.stopPrank();
 
         uint256 idrxAfterClaim = idrx.balanceOf(user1);
@@ -224,23 +221,19 @@ contract SuperClusterTest is Test {
 
         // Withdraw
         vm.startPrank(user1);
-        superCluster.withdraw(address(idrx), DEPOSIT_AMOUNT);
+        superCluster.withdraw(address(pilot), address(idrx), DEPOSIT_AMOUNT);
         vm.stopPrank();
 
         // Fund withdraw manager
         Withdraw withdrawManager = Withdraw(superCluster.withdrawManager());
         idrx.transfer(address(withdrawManager), DEPOSIT_AMOUNT);
 
-        // Finalize (by SuperCluster)
-        vm.prank(address(superCluster));
-        withdrawManager.finalizeWithdraw(1, DEPOSIT_AMOUNT); // or correct ID
-
         // Warp time
         vm.warp(block.timestamp + 1 days);
 
         // Claim
         vm.prank(user1);
-        superCluster.claim(1);
+        withdrawManager.claim(1);
 
         // Assert
         uint256 userBalanceAfter = idrx.balanceOf(user1);

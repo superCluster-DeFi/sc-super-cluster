@@ -70,6 +70,10 @@ contract Withdraw is Ownable {
     /// @notice Emitted when a withdraw is informed (for off-chain tracking)
     event WithdrawInformed(uint256 indexed id, address indexed user, uint256 baseAmount, uint256 timestamp);
 
+    /// @notice Mapping from user address to array of their withdraw request IDs.
+    /// @dev Allows users to easily track all their withdrawal requests.
+    mapping(address => uint256[]) public userRequests;
+
     /**
      * @dev Deploys WithdrawManager contract.
      * @param _sToken Address of sToken contract.
@@ -173,8 +177,9 @@ contract Withdraw is Ownable {
         r.claimed = false;
         r.availableAt = 0;
         r.baseAmount = 0;
-
         r.baseAmount = sAmount;
+
+        userRequests[user].push(id);
 
         emit WithdrawRequested(id, user, sAmount, block.timestamp);
         return id;
@@ -266,30 +271,6 @@ contract Withdraw is Ownable {
 
         emit WithdrawFinalized(id, baseAmount, r.availableAt, block.timestamp);
     }
-
-    /**
-     * @notice Cancel a withdraw request and return sToken to user.
-     * @dev Only owner/operator can call.
-     * @param id Withdraw request ID.
-     */
-    function cancelRequest(uint256 id) external onlyOwner {
-        Request storage r = requests[id];
-        require(r.user != address(0), "Invalid request");
-        require(!r.claimed, "Already claimed");
-
-        uint256 sAmt = r.sAmount;
-        address user = r.user;
-
-        delete requests[id];
-
-        IERC20(address(sToken)).safeTransfer(user, sAmt);
-
-        emit RequestCancelled(id, user, sAmt);
-    }
-
-    /* ------------------------------------------------------------------------
-       User: claim finalized withdraw
-       ------------------------------------------------------------------------ */
 
     /**
      * @notice Claim finalized withdraw after delay.
@@ -386,5 +367,14 @@ contract Withdraw is Ownable {
     function emergencyWithdrawSToken(uint256 amount, address to) external onlyOwner {
         require(to != address(0), "Invalid to");
         IERC20(address(sToken)).safeTransfer(to, amount);
+    }
+
+    /**
+     * @notice Returns all withdraw request IDs for a given user.
+     * @param user The user address.
+     * @return Array of withdraw request IDs belonging to the user.
+     */
+    function getRequestsOf(address user) external view returns (uint256[] memory) {
+        return userRequests[user];
     }
 }

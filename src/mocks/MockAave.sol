@@ -63,6 +63,7 @@ contract LendingPool is ReentrancyGuard {
         if (totalSupplyShares == 0) {
             shares = amount;
         } else {
+            require(totalSupplyAssets > 0, "totalSupplyAssets is zero");
             shares = (amount * totalSupplyShares / totalSupplyAssets);
         }
 
@@ -183,7 +184,9 @@ contract LendingPool is ReentrancyGuard {
         totalSupplyAssets -= amount;
         totalSupplyShares -= shares;
 
-        if (totalSupplyAssets < totalBorrowAssets) revert InsufficientLiquidity();
+        if (totalSupplyShares == 0) {
+            require(totalSupplyAssets == 0, "assets mismatch");
+        }
 
         IERC20(debtToken).safeTransfer(msg.sender, amount);
 

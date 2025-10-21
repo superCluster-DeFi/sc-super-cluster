@@ -140,22 +140,6 @@ contract WithdrawTest is Test {
         assertEq(afterBase - beforeBase, 100 ether);
     }
 
-    /// --- test cancelRequest() by owner
-    function test_CancelRequestByOwner() public {
-        vm.prank(user1);
-        uint256 requestId = withdraw.requestWithdraw(150 ether);
-
-        uint256 beforeBalance = sToken.balanceOf(user1);
-        withdraw.cancelRequest(requestId);
-        uint256 afterBalance = sToken.balanceOf(user1);
-
-        assertGt(afterBalance, beforeBalance, "sToken must be returned");
-
-        // after cancel, getRequest() should show zero data
-        (address reqUser,,,,,,) = withdraw.getRequest(requestId);
-        assertEq(reqUser, address(0), "request should be deleted");
-    }
-
     /// --- test emergencyWithdrawBase()
     function test_EmergencyWithdrawBase() public {
         withdraw.fund(100 ether);
