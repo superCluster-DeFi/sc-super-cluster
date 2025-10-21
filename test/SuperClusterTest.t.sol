@@ -1,8 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-import "forge-std/Test.sol";
-import "forge-std/console.sol";
+import {Test, console} from "forge-std/Test.sol";
 import {SuperCluster} from "../src/SuperCluster.sol";
 import {SToken} from "../src/tokens/SToken.sol";
 import {WsToken} from "../src/tokens/WsToken.sol";
@@ -12,8 +11,10 @@ import {MorphoAdapter} from "../src/adapter/MorphoAdapter.sol";
 import {LendingPool} from "../src/mocks/MockAave.sol";
 import {MockMorpho} from "../src/mocks/MockMorpho.sol";
 import {MockIDRX} from "../src/mocks/tokens/MockIDRX.sol";
-import {Id, MarketParams} from "../src/mocks/interfaces/IMorpho.sol";
+import {MarketParams} from "../src/mocks/interfaces/IMorpho.sol";
 import {Withdraw} from "../src/tokens/WithDraw.sol";
+import {MockOracle} from "../src/mocks/MockOracle.sol";
+import {MockIrm} from "../src/mocks/MockIrm.sol";
 
 contract SuperClusterTest is Test {
     SuperCluster public superCluster;
@@ -48,17 +49,15 @@ contract SuperClusterTest is Test {
         sToken = superCluster.sToken();
         wsToken = superCluster.wsToken();
 
-        Withdraw withdrawManager = new Withdraw(address(sToken), address(idrx), address(superCluster), 1 days);
-
-        // Register pilot
-        superCluster.setWithdrawManager(address(withdrawManager));
-        withdrawManager.transferOwnership(address(superCluster));
+        MockIrm mockIrm = new MockIrm();
+        MockOracle mockOracle = new MockOracle();
+        uint256 ltv = 800000000000000000; // 80% LTV
 
         //Deploy Mock protocols
-        _deployMockProtocols();
+        _deployMockProtocols(address(mockIrm), address(mockOracle), ltv);
 
         // Deploy adapters
-        _deployAdapters();
+        _deployAdapters(address(mockIrm), address(mockOracle), ltv);
 
         // Deploy pilot
         _deployPilot();
@@ -71,39 +70,30 @@ contract SuperClusterTest is Test {
         // (Opsional) log untuk debugging
         console.log("SuperCluster:", address(superCluster));
         console.log("SToken:", address(sToken));
-        console.log("Withdraw:", address(withdrawManager));
     }
 
-    function _deployMockProtocols() internal {
-        // Deploy MockAave
-        address mockOracle = address(0x1);
-        uint256 ltv = 800000000000000000; // 80% LTV
-
-        mockAave = new LendingPool(address(idrx), address(idrx), mockOracle, ltv);
+    function _deployMockProtocols(address _mockIrm, address _mockOracle, uint256 _ltv) internal {
+        mockAave = new LendingPool(address(idrx), address(idrx), address(_mockOracle), _ltv);
 
         // Deploy MockMorpho
         mockMorpho = new MockMorpho();
 
-        // Setup MockMorpho
-        address mockIrm = address(0x2);
-        uint256 lltv = 800000000000000000;
-
-        mockMorpho.enableIrm(mockIrm);
-        mockMorpho.enableLltv(lltv);
+        mockMorpho.enableLltv(_ltv);
+        mockMorpho.enableIrm(address(_mockIrm));
 
         // Create Morpho market
         MarketParams memory params = MarketParams({
             loanToken: address(idrx),
             collateralToken: address(idrx),
-            oracle: mockOracle,
-            irm: mockIrm,
-            lltv: lltv
+            oracle: address(_mockOracle),
+            irm: address(_mockIrm),
+            lltv: _ltv
         });
 
         mockMorpho.createMarket(params);
     }
 
-    function _deployAdapters() internal {
+    function _deployAdapters(address _mockIrm, address _mockOracle, uint256 _ltv) internal {
         // Deploy AaveAdapter
         aaveAdapter = new AaveAdapter(address(idrx), address(mockAave), "Aave V3", "Conservative Lending");
 
@@ -111,9 +101,9 @@ contract SuperClusterTest is Test {
         MarketParams memory params = MarketParams({
             loanToken: address(idrx),
             collateralToken: address(idrx),
-            oracle: address(0x1),
-            irm: address(0x2),
-            lltv: 800000000000000000
+            oracle: address(_mockOracle),
+            irm: address(_mockIrm),
+            lltv: _ltv
         });
 
         morphoAdapter =
@@ -155,15 +145,12 @@ contract SuperClusterTest is Test {
         idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
 
         uint256 balanceBefore = sToken.balanceOf(user1);
-        console.log("sToken balance before deposit:", balanceBefore);
 
         superCluster.deposit(address(pilot), address(idrx), DEPOSIT_AMOUNT);
 
         uint256 balanceAfter = sToken.balanceOf(user1);
-        console.log("sToken balance after deposit:", balanceAfter);
 
-        assertEq(balanceAfter - balanceBefore, DEPOSIT_AMOUNT);
-        assertEq(superCluster.tokenBalances(address(idrx)), 0);
+        assertEq(balanceAfter - balanceBefore, DEPOSIT_AMOUNT); // 1:1
         vm.stopPrank();
     }
 
@@ -284,14 +271,17 @@ contract SuperClusterTest is Test {
         superCluster.deposit(address(pilot), address(idrx), DEPOSIT_AMOUNT);
         vm.stopPrank();
 
-        uint256 aumBefore = superCluster.calculateTotalAUM();
+        uint256 balanceBefore = sToken.balanceOf(user1);
 
-        vm.warp(block.timestamp + 1 days);
-        // Trigger rebase
+        // Simulate yield/rebase 10%
+        uint256 yieldAmount = DEPOSIT_AMOUNT / 10;
+        bool status = idrx.transfer(address(pilot), yieldAmount);
+        require(status, "Transfer failed");
+        vm.startPrank(owner);
         superCluster.rebase();
 
-        uint256 aumAfter = sToken.totalAssetsUnderManagement();
-        assertEq(aumAfter, aumBefore);
+        uint256 balanceAfter = sToken.balanceOf(user1);
+        assertEq(balanceAfter, balanceBefore + yieldAmount);
     }
 
     function test_Fail_SuperCluster_Deposit_Zero_Amount() public {
@@ -349,7 +339,8 @@ contract SuperClusterTest is Test {
 
     function test_Pilot_Invest() public {
         // Transfer tokens to pilot
-        idrx.transfer(address(pilot), DEPOSIT_AMOUNT);
+        bool status = idrx.transfer(address(pilot), DEPOSIT_AMOUNT);
+        require(status, "Transfer failed");
 
         address[] memory adapters = new address[](1);
         uint256[] memory allocations = new uint256[](1);
@@ -357,7 +348,8 @@ contract SuperClusterTest is Test {
         allocations[0] = 10000;
 
         // Fund adapter with tokens first
-        idrx.transfer(address(aaveAdapter), DEPOSIT_AMOUNT);
+        status = idrx.transfer(address(aaveAdapter), DEPOSIT_AMOUNT);
+        require(status, "Transfer failed");
 
         pilot.invest(DEPOSIT_AMOUNT, adapters, allocations);
 
@@ -367,7 +359,8 @@ contract SuperClusterTest is Test {
 
     function test_Pilot_GetTotalValue() public {
         // Transfer some tokens to pilot (idle funds)
-        idrx.transfer(address(pilot), 500e18);
+        bool status = idrx.transfer(address(pilot), 500e18);
+        require(status, "Transfer failed");
 
         uint256 totalValue = pilot.getTotalValue();
 

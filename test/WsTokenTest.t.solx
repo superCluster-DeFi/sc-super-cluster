@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-import "forge-std/Test.sol";
+import {Test, console} from "forge-std/Test.sol";
 import {MockUSDC} from "../src/mocks/tokens/MockUSDC.sol";
 import {SToken} from "../src/tokens/SToken.sol";
 import {WsToken} from "../src/tokens/WsToken.sol";
@@ -159,6 +159,8 @@ contract WsTokenTest is Test {
 
         uint256 user1Balance = wsToken.balanceOf(user1);
         uint256 user2Balance = wsToken.balanceOf(user2);
+        console.log("User balance 1", user1Balance);
+        console.log("User balance 2", user2Balance);
 
         // Both unwrap and check proportional returns
         vm.prank(user1);
