@@ -47,6 +47,7 @@ contract Withdraw is Ownable {
     event WithdrawClaimed(uint256 indexed id, address indexed user, uint256 baseAmount, uint256 timestamp);
     event Funded(address indexed sender, uint256 amount, uint256 balance);
     event RequestCancelled(uint256 indexed id, address indexed user, uint256 sAmount);
+    event WithdrawInformed(uint256 indexed id, address indexed user, uint256 baseAmount, uint256 timestamp);
 
     constructor(address _sToken, address _baseToken, address _superCluster, uint256 _withdrawDelay)
         Ownable(msg.sender)
@@ -57,6 +58,25 @@ contract Withdraw is Ownable {
         superCluster = _superCluster;
         withdrawDelay = _withdrawDelay;
         nextRequestId = 1;
+    }
+
+    function informWithdraw(uint256 id) external onlyOwner {
+        Request storage r = requests[id];
+        require(r.user != address(0), "Invalid request");
+        require(r.finalized, "Not finalized yet");
+        require(!r.claimed, "Already claimed");
+
+        emit WithdrawInformed(id, r.user, r.baseAmount, block.timestamp);
+    }
+
+    /// @notice Get summarized info for a withdraw request
+    function getWithdrawInfo(uint256 id)
+        external
+        view
+        returns (address user, uint256 sAmount, uint256 baseAmount, bool finalized, bool claimed, uint256 availableAt)
+    {
+        Request storage r = requests[id];
+        return (r.user, r.sAmount, r.baseAmount, r.finalized, r.claimed, r.availableAt);
     }
 
     /* ------------------------------------------------------------------------
@@ -86,6 +106,8 @@ contract Withdraw is Ownable {
         r.availableAt = 0;
         r.baseAmount = 0;
 
+        r.baseAmount = sAmount;
+
         emit WithdrawRequested(id, msg.sender, sAmount, block.timestamp);
         return id;
     }
@@ -103,6 +125,8 @@ contract Withdraw is Ownable {
         r.claimed = false;
         r.availableAt = 0;
         r.baseAmount = 0;
+
+        r.baseAmount = sAmount;
 
         emit WithdrawRequested(id, user, sAmount, block.timestamp);
         return id;
@@ -137,20 +161,25 @@ contract Withdraw is Ownable {
     function processWithdraw(address user, uint256 sAmount, uint256 baseAmount) external onlyOwner {
         require(user != address(0), "Invalid user");
         require(baseAmount > 0 && sAmount > 0, "Zero amount");
+        require(baseToken.balanceOf(address(this)) >= baseAmount, "Insufficient base balance");
 
+        // transfer sToken dari user ke contract, lalu burn
+        sToken.transferFrom(user, address(this), sAmount);
+        sToken.burn(address(this), sAmount);
+
+        // kirim base token ke user
+        baseToken.transfer(user, baseAmount);
+
+        // record request
         uint256 id = nextRequestId++;
         Request storage r = requests[id];
         r.user = user;
         r.sAmount = sAmount;
         r.baseAmount = baseAmount;
         r.requestedAt = block.timestamp;
-        r.availableAt = block.timestamp;
         r.finalized = true;
         r.claimed = true;
-
-        // burn sToken dan transfer base token
-        try ISToken(address(sToken)).burn(address(this), sAmount) {} catch {}
-        baseToken.safeTransfer(user, baseAmount);
+        r.availableAt = block.timestamp;
 
         emit WithdrawClaimed(id, user, baseAmount, block.timestamp);
     }
@@ -210,7 +239,10 @@ contract Withdraw is Ownable {
         require(!r.claimed, "Already claimed");
         require(r.finalized, "Not finalized yet");
         require(block.timestamp >= r.availableAt, "Not available yet");
-        require(msg.sender == r.user, "Not request owner");
+
+        if (msg.sender != r.user && msg.sender != owner()) {
+            revert("Not request owner");
+        }
 
         uint256 baseAmount = r.baseAmount;
         require(baseAmount > 0, "Zero base amount");
@@ -218,16 +250,6 @@ contract Withdraw is Ownable {
         // mark claimed before external transfer to avoid reentrancy
         r.claimed = true;
 
-        // Burn held sToken to update SToken state (requires this contract to be authorized minter)
-        // If burn call fails (not authorized), we still proceed but sTokens remain in this contract;
-        // it's recommended to set this contract as authorized minter on SToken so burn reduces total AUM.
-        try ISToken(address(sToken)).burn(address(this), r.sAmount) {
-            // burned successfully
-        } catch {
-            // ignore: fallback to not burning if not allowed
-        }
-
-        // Transfer base token to user
         baseToken.safeTransfer(r.user, baseAmount);
 
         emit WithdrawClaimed(id, r.user, baseAmount, block.timestamp);

@@ -50,6 +50,10 @@ contract SuperClusterTest is Test {
 
         Withdraw withdrawManager = new Withdraw(address(sToken), address(idrx), address(superCluster), 1 days);
 
+        // Register pilot
+        superCluster.setWithdrawManager(address(withdrawManager));
+        withdrawManager.transferOwnership(address(superCluster));
+
         //Deploy Mock protocols
         _deployMockProtocols();
 
@@ -62,7 +66,6 @@ contract SuperClusterTest is Test {
         // Setup pilot strategy
         _setupPilotStrategy();
 
-        // Register pilot
         superCluster.registerPilot(address(pilot), address(idrx));
 
         // (Opsional) log untuk debugging
@@ -165,58 +168,96 @@ contract SuperClusterTest is Test {
     }
 
     function test_SuperCluster_Withdraw() public {
-        console.log("=== TEST: SuperCluster Withdraw Flow (fixed) ===");
+        console.log("=== TEST: SuperCluster Withdraw Flow ===");
 
         // === STEP 1: Deposit ===
         vm.startPrank(user1);
         uint256 idrxBalanceBefore = idrx.balanceOf(user1);
-        console.log("user1 IDRX balance before deposit:", idrxBalanceBefore);
+        console.log("User1 IDRX balance before deposit:", idrxBalanceBefore);
 
         idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
         superCluster.deposit(address(pilot), address(idrx), DEPOSIT_AMOUNT);
         vm.stopPrank();
 
-        // Check sToken state after deposit
         uint256 sTokenBalanceAfterDeposit = sToken.balanceOf(user1);
-        console.log("sToken balance of user1 after deposit:", sTokenBalanceAfterDeposit);
-        assertGt(sTokenBalanceAfterDeposit, 0);
+        console.log("User1 sToken after deposit:", sTokenBalanceAfterDeposit);
+        assertGt(sTokenBalanceAfterDeposit, 0, "Deposit should mint sToken");
 
-        // === STEP 2: Withdraw request ===
+        // === STEP 2: Withdraw Request ===
         vm.startPrank(user1);
-        console.log("Calling superCluster.withdraw by user1 ...");
-        uint256 beforeWithdrawBalance = sToken.balanceOf(user1);
-        console.log("sToken before withdraw:", beforeWithdrawBalance);
-
-        // Now withdraw full amount (SuperCluster will route to pilot which withdraws proportionally)
+        console.log("Requesting withdraw of", DEPOSIT_AMOUNT, "IDRX...");
         superCluster.withdraw(address(idrx), DEPOSIT_AMOUNT);
         vm.stopPrank();
 
-        uint256 sTokenBalanceAfter = sToken.balanceOf(user1);
-        console.log("sToken after withdraw request:", sTokenBalanceAfter);
-        assertEq(sTokenBalanceAfter, beforeWithdrawBalance - DEPOSIT_AMOUNT);
+        // check pending withdraw
+        Withdraw withdrawManager = Withdraw(superCluster.withdrawManager());
+        (,, uint256 pendingAmount,,,,) = withdrawManager.requests(1);
+        console.log("Pending withdraw amount:", pendingAmount);
+        assertEq(pendingAmount, DEPOSIT_AMOUNT, "Withdraw request should be recorded");
 
-        // === STEP 3: Warp time (delay for Withdraw) ===
+        // === STEP 3: Warp time (simulate delay period) ===
         vm.warp(block.timestamp + 1 days);
 
-        // === STEP 4: Process withdraw (owner of Withdraw is superCluster) ===
-        Withdraw withdrawManager = Withdraw(superCluster.withdrawManager());
-
-        // Check balances before claiming
-        console.log("Withdraw contract IDRX balance BEFORE finalize:", idrx.balanceOf(address(withdrawManager)));
-        console.log("User1 IDRX balance BEFORE finalize:", idrx.balanceOf(user1));
+        // === STEP 4: Finalize withdraw (by SuperCluster) ===
+        // fund withdrawManager first
+        idrx.transfer(address(withdrawManager), DEPOSIT_AMOUNT);
 
         vm.prank(address(superCluster));
-        withdrawManager.processWithdraw(user1, DEPOSIT_AMOUNT, DEPOSIT_AMOUNT);
+        withdrawManager.finalizeWithdraw(1, DEPOSIT_AMOUNT);
 
-        // Check after
-        uint256 userAfter = idrx.balanceOf(user1);
-        uint256 expected = idrxBalanceBefore; // user started with this amount, deposit removed DEPOSIT_AMOUNT, then withdraw returns it
-        assertEq(userAfter, expected, "User balance should be restored after withdraw");
+        console.log("Withdraw finalized. WithdrawManager IDRX balance:", idrx.balanceOf(address(withdrawManager)));
 
-        console.log(
-            "Withdraw flow complete. Withdraw contract balance AFTER:", idrx.balanceOf(address(withdrawManager))
-        );
-        console.log("User1 balance AFTER:", userAfter);
+        // === STEP 5: Warp again for claim delay ===
+        vm.warp(block.timestamp + 1 days);
+
+        // === STEP 6: User claim ===
+        uint256 idrxBeforeClaim = idrx.balanceOf(user1);
+        vm.startPrank(user1);
+        superCluster.claim(1);
+        vm.stopPrank();
+
+        uint256 idrxAfterClaim = idrx.balanceOf(user1);
+
+        console.log("User1 IDRX before claim:", idrxBeforeClaim);
+        console.log("User1 IDRX after claim:", idrxAfterClaim);
+        console.log("WithdrawManager IDRX after claim:", idrx.balanceOf(address(withdrawManager)));
+
+        // === Assertion ===
+        assertEq(idrxAfterClaim, idrxBalanceBefore, "User1 should have full balance restored after withdraw and claim");
+
+        console.log("=== Withdraw flow complete and verified ===");
+    }
+
+    function test_SuperCluster_claim() public {
+        // Deposit
+        vm.startPrank(user1);
+        idrx.approve(address(superCluster), DEPOSIT_AMOUNT);
+        superCluster.deposit(address(pilot), address(idrx), DEPOSIT_AMOUNT);
+        vm.stopPrank();
+
+        // Withdraw
+        vm.startPrank(user1);
+        superCluster.withdraw(address(idrx), DEPOSIT_AMOUNT);
+        vm.stopPrank();
+
+        // Fund withdraw manager
+        Withdraw withdrawManager = Withdraw(superCluster.withdrawManager());
+        idrx.transfer(address(withdrawManager), DEPOSIT_AMOUNT);
+
+        // Finalize (by SuperCluster)
+        vm.prank(address(superCluster));
+        withdrawManager.finalizeWithdraw(1, DEPOSIT_AMOUNT); // or correct ID
+
+        // Warp time
+        vm.warp(block.timestamp + 1 days);
+
+        // Claim
+        vm.prank(user1);
+        superCluster.claim(1);
+
+        // Assert
+        uint256 userBalanceAfter = idrx.balanceOf(user1);
+        assertEq(userBalanceAfter, INITIAL_SUPPLY, "User balance should be restored after claim");
     }
 
     function test_SuperCluster_RegisterPilot() public {
