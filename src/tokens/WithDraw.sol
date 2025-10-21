@@ -1,54 +1,82 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.13;
 
-/// @notice Withdraw queue manager for SToken -> BaseToken withdrawals
-/// @dev Designed to work with your SToken (share-based) and an ERC20 base token.
-/// @dev Contract uses SafeERC20 for safe transfers.
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {Ownable} from "@openzeppelin/contracts/access/Ownable.sol";
-import {SuperCluster} from "../SuperCluster.sol";
+import {ISToken} from "../interfaces/ISToken.sol";
 
-interface ISToken {
-    function transferFrom(address from, address to, uint256 amount) external returns (bool);
-    function balanceOf(address account) external view returns (uint256);
-    function burn(address from, uint256 amount) external;
-    function allowance(address owner, address spender) external view returns (uint256);
-}
-
-/// @title WithdrawManager
-/// @notice Minimal queued withdrawal manager: request -> finalize (operator) -> claim (user)
+/**
+ * @title WithdrawManager
+ * @notice Queued withdrawal manager for SToken -> BaseToken withdrawals.
+ * @dev Supports request, finalize (operator), and claim (user) flow.
+ *      - Designed for rebasing sToken and ERC20 base token.
+ *      - Handles delays, emergency withdrawals, and operator funding.
+ *      - Uses SafeERC20 for all token transfers.
+ * @author SuperCluster Dev Team
+ */
 contract Withdraw is Ownable {
     using SafeERC20 for IERC20;
 
-    address public immutable superCluster;
+    /// @notice SuperCluster contract address (protocol owner)
+    address public superCluster;
 
-    IERC20 public immutable baseToken; // underlying token (e.g., ETH wrapped or ERC20)
-    ISToken public immutable sToken; // rebasing token (sToken)
+    /// @notice Underlying base token (e.g. ERC20)
+    IERC20 public baseToken;
 
-    uint256 public lastRebaseTime; // timestamp of last rebase
-    uint256 public withdrawDelay; // optional delay (seconds) between request and claim availability
+    /// @notice Rebasing sToken contract
+    ISToken public sToken;
+
+    /// @notice Last rebase timestamp (for future extension)
+    uint256 public lastRebaseTime;
+
+    /// @notice Delay (in seconds) between finalize and claim availability
+    uint256 public withdrawDelay;
+
+    /// @notice Next request ID (auto-increment)
     uint256 public nextRequestId;
 
+    /// @notice Withdraw request struct
     struct Request {
         address user;
-        uint256 sAmount; // amount of sToken deposited with request
-        uint256 baseAmount; // amount of base token available to claim (set during finalize)
+        uint256 sAmount;
+        uint256 baseAmount;
         uint256 requestedAt;
-        uint256 availableAt; // when user can claim (0 if not finalized)
+        uint256 availableAt;
         bool finalized;
         bool claimed;
     }
 
+    /// @notice Mapping of requestId to Request
     mapping(uint256 => Request) public requests;
 
+    // --- Events ---
+
+    /// @notice Emitted when a withdraw is requested
     event WithdrawRequested(uint256 indexed id, address indexed user, uint256 sAmount, uint256 timestamp);
+
+    /// @notice Emitted when a withdraw is finalized
     event WithdrawFinalized(uint256 indexed id, uint256 baseAmount, uint256 availableAt, uint256 timestamp);
+
+    /// @notice Emitted when a withdraw is claimed
     event WithdrawClaimed(uint256 indexed id, address indexed user, uint256 baseAmount, uint256 timestamp);
+
+    /// @notice Emitted when contract is funded for withdrawals
     event Funded(address indexed sender, uint256 amount, uint256 balance);
+
+    /// @notice Emitted when a request is cancelled
     event RequestCancelled(uint256 indexed id, address indexed user, uint256 sAmount);
+
+    /// @notice Emitted when a withdraw is informed (for off-chain tracking)
     event WithdrawInformed(uint256 indexed id, address indexed user, uint256 baseAmount, uint256 timestamp);
 
+    /**
+     * @dev Deploys WithdrawManager contract.
+     * @param _sToken Address of sToken contract.
+     * @param _baseToken Address of base token contract.
+     * @param _superCluster Address of SuperCluster contract.
+     * @param _withdrawDelay Delay (seconds) between finalize and claim.
+     */
     constructor(address _sToken, address _baseToken, address _superCluster, uint256 _withdrawDelay)
         Ownable(msg.sender)
     {
@@ -60,6 +88,10 @@ contract Withdraw is Ownable {
         nextRequestId = 1;
     }
 
+    /**
+     * @notice Inform off-chain system about a finalized withdraw.
+     * @param id Withdraw request ID.
+     */
     function informWithdraw(uint256 id) external onlyOwner {
         Request storage r = requests[id];
         require(r.user != address(0), "Invalid request");
@@ -69,7 +101,16 @@ contract Withdraw is Ownable {
         emit WithdrawInformed(id, r.user, r.baseAmount, block.timestamp);
     }
 
-    /// @notice Get summarized info for a withdraw request
+    /**
+     * @notice Get summarized info for a withdraw request.
+     * @param id Withdraw request ID.
+     * @return user Request owner.
+     * @return sAmount sToken amount.
+     * @return baseAmount Base token amount.
+     * @return finalized Whether finalized.
+     * @return claimed Whether claimed.
+     * @return availableAt When claim is available.
+     */
     function getWithdrawInfo(uint256 id)
         external
         view
@@ -79,12 +120,12 @@ contract Withdraw is Ownable {
         return (r.user, r.sAmount, r.baseAmount, r.finalized, r.claimed, r.availableAt);
     }
 
-    /* ------------------------------------------------------------------------
-       User-facing: request withdraw
-       ------------------------------------------------------------------------ */
-
-    /// @notice Request a withdrawal by transferring sToken into this contract.
-    /// @dev User must approve this contract to spend their sToken before calling.
+    /**
+     * @notice User requests withdrawal by transferring sToken.
+     * @dev User must approve sToken for this contract before calling.
+     * @param sAmount Amount of sToken to withdraw.
+     * @return id Withdraw request ID.
+     */
     function requestWithdraw(uint256 sAmount) external returns (uint256) {
         require(sAmount > 0, "Zero amount");
 
@@ -112,6 +153,13 @@ contract Withdraw is Ownable {
         return id;
     }
 
+    /**
+     * @notice SuperCluster creates a withdraw request for a user.
+     * @dev Only callable by SuperCluster.
+     * @param user User address.
+     * @param sAmount Amount of sToken to withdraw.
+     * @return id Withdraw request ID.
+     */
     function autoRequest(address user, uint256 sAmount) external returns (uint256) {
         require(msg.sender == superCluster, "Only SuperCluster");
         require(sAmount > 0, "Zero amount");
@@ -132,6 +180,12 @@ contract Withdraw is Ownable {
         return id;
     }
 
+    /**
+     * @notice Create a withdraw request for a user (external).
+     * @param user User address.
+     * @param sAmount Amount of sToken to withdraw.
+     * @return id Withdraw request ID.
+     */
     function requestWithdrawForUser(address user, uint256 sAmount) external returns (uint256) {
         require(msg.sender != address(0), "Invalid sender");
         require(sAmount > 0, "Zero amount");
@@ -150,27 +204,33 @@ contract Withdraw is Ownable {
         return id;
     }
 
-    /// @notice Owner/Operator funds base tokens to this contract to fulfill claims.
-    /// @dev Operator should unstake underlying assets off-chain and then call fund() to deposit base tokens for claims.
+    /**
+     * @notice Operator funds base tokens to fulfill claims.
+     * @dev Owner should call after unstaking or off-chain conversion.
+     * @param amount Amount of base token to fund.
+     */
     function fund(uint256 amount) external onlyOwner {
         require(amount > 0, "Zero fund");
         baseToken.safeTransferFrom(msg.sender, address(this), amount);
         emit Funded(msg.sender, amount, baseToken.balanceOf(address(this)));
     }
 
+    /**
+     * @notice Operator processes a withdraw for a user (burns sToken, sends base token).
+     * @param user User address.
+     * @param sAmount Amount of sToken.
+     * @param baseAmount Amount of base token.
+     */
     function processWithdraw(address user, uint256 sAmount, uint256 baseAmount) external onlyOwner {
         require(user != address(0), "Invalid user");
         require(baseAmount > 0 && sAmount > 0, "Zero amount");
         require(baseToken.balanceOf(address(this)) >= baseAmount, "Insufficient base balance");
 
-        // transfer sToken dari user ke contract, lalu burn
         sToken.transferFrom(user, address(this), sAmount);
         sToken.burn(address(this), sAmount);
 
-        // kirim base token ke user
         baseToken.transfer(user, baseAmount);
 
-        // record request
         uint256 id = nextRequestId++;
         Request storage r = requests[id];
         r.user = user;
@@ -184,10 +244,12 @@ contract Withdraw is Ownable {
         emit WithdrawClaimed(id, user, baseAmount, block.timestamp);
     }
 
-    /// @notice Finalize a pending request by specifying how much base token is available for it.
-    /// @dev Finalize marks request as ready to be claimed after optional delay.
-    /// @param id request id
-    /// @param baseAmount amount of baseToken available for this request (operator determines conversion)
+    /**
+     * @notice Finalize a pending withdraw request.
+     * @dev Marks request as ready to be claimed after optional delay.
+     * @param id Withdraw request ID.
+     * @param baseAmount Amount of base token available for claim.
+     */
     function finalizeWithdraw(uint256 id, uint256 baseAmount) external onlyOwner {
         Request storage r = requests[id];
         require(r.user != address(0), "Invalid request");
@@ -205,8 +267,11 @@ contract Withdraw is Ownable {
         emit WithdrawFinalized(id, baseAmount, r.availableAt, block.timestamp);
     }
 
-    /// @notice Cancel request and return sToken to user (only owner/operator can call)
-    /// @dev Useful for operator to cancel bad requests or in emergency.
+    /**
+     * @notice Cancel a withdraw request and return sToken to user.
+     * @dev Only owner/operator can call.
+     * @param id Withdraw request ID.
+     */
     function cancelRequest(uint256 id) external onlyOwner {
         Request storage r = requests[id];
         require(r.user != address(0), "Invalid request");
@@ -215,14 +280,8 @@ contract Withdraw is Ownable {
         uint256 sAmt = r.sAmount;
         address user = r.user;
 
-        // Reset request
         delete requests[id];
 
-        // Return sToken to user
-        // Attempt to transfer stored sToken back
-        // Note: transfer may fail if sToken has special logic; assume standard ERC20 transfer works
-        // We call sToken.transferFrom? No — we hold sToken in this contract so call baseToken.transfer
-        // But ISToken does not expose transfer; to be safe, we use IERC20 interface for sToken raw token address
         IERC20(address(sToken)).safeTransfer(user, sAmt);
 
         emit RequestCancelled(id, user, sAmt);
@@ -232,7 +291,10 @@ contract Withdraw is Ownable {
        User: claim finalized withdraw
        ------------------------------------------------------------------------ */
 
-    /// @notice Claim finalized withdraw after operator marked it ready and optional delay passed
+    /**
+     * @notice Claim finalized withdraw after delay.
+     * @param id Withdraw request ID.
+     */
     function claim(uint256 id) external {
         Request storage r = requests[id];
         require(r.user != address(0), "Invalid request");
@@ -247,7 +309,6 @@ contract Withdraw is Ownable {
         uint256 baseAmount = r.baseAmount;
         require(baseAmount > 0, "Zero base amount");
 
-        // mark claimed before external transfer to avoid reentrancy
         r.claimed = true;
 
         baseToken.safeTransfer(r.user, baseAmount);
@@ -255,10 +316,17 @@ contract Withdraw is Ownable {
         emit WithdrawClaimed(id, r.user, baseAmount, block.timestamp);
     }
 
-    /* ------------------------------------------------------------------------
-       Views / helpers
-       ------------------------------------------------------------------------ */
-
+    /**
+     * @notice Get full details for a withdraw request.
+     * @param id Withdraw request ID.
+     * @return user Request owner.
+     * @return sAmount sToken amount.
+     * @return baseAmount Base token amount.
+     * @return requestedAt Timestamp of request.
+     * @return availableAt Timestamp when claim is available.
+     * @return finalized Whether finalized.
+     * @return claimed Whether claimed.
+     */
     function getRequest(uint256 id)
         external
         view
@@ -276,29 +344,45 @@ contract Withdraw is Ownable {
         return (r.user, r.sAmount, r.baseAmount, r.requestedAt, r.availableAt, r.finalized, r.claimed);
     }
 
+    /**
+     * @notice Get base token balance of this contract.
+     * @return Base token balance.
+     */
     function contractBaseBalance() external view returns (uint256) {
         return baseToken.balanceOf(address(this));
     }
 
+    /**
+     * @notice Get sToken balance of this contract.
+     * @return sToken balance.
+     */
     function contractSTokenBalance() external view returns (uint256) {
         return IERC20(address(sToken)).balanceOf(address(this));
     }
 
-    /* ------------------------------------------------------------------------
-       Owner utilities
-       ------------------------------------------------------------------------ */
-
+    /**
+     * @notice Set withdraw delay (seconds).
+     * @param _delay New delay in seconds.
+     */
     function setWithdrawDelay(uint256 _delay) external onlyOwner {
         withdrawDelay = _delay;
     }
 
-    /// @notice Emergency withdraw of base tokens to owner
+    /**
+     * @notice Emergency withdraw base tokens to owner.
+     * @param amount Amount to withdraw.
+     * @param to Recipient address.
+     */
     function emergencyWithdrawBase(uint256 amount, address to) external onlyOwner {
         require(to != address(0), "Invalid to");
         baseToken.safeTransfer(to, amount);
     }
 
-    /// @notice Emergency withdraw of sTokens to owner (could be used for migration)
+    /**
+     * @notice Emergency withdraw sTokens to owner.
+     * @param amount Amount to withdraw.
+     * @param to Recipient address.
+     */
     function emergencyWithdrawSToken(uint256 amount, address to) external onlyOwner {
         require(to != address(0), "Invalid to");
         IERC20(address(sToken)).safeTransfer(to, amount);

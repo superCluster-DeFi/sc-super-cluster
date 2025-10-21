@@ -6,32 +6,67 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {IPilot} from "../interfaces/IPilot.sol";
 import {IAdapter} from "../interfaces/IAdapter.sol";
-import {console} from "forge-std/console.sol";
 
+/**
+ * @title Pilot
+ * @notice Strategy manager for SuperCluster protocol.
+ *         - Manages allocation of base tokens to adapters (DeFi protocols).
+ *         - Supports invest, divest, harvest, and emergency withdraw flows.
+ *         - Integrates with SuperCluster for auto-invest and withdrawals.
+ *         - Tracks strategy adapters and allocations.
+ * @author SuperCluster Dev Team
+ */
 contract Pilot is IPilot, Ownable, ReentrancyGuard {
+    /// @notice Name of the pilot strategy
     string public override name;
+
+    /// @notice Description of the pilot strategy
     string public _description;
+
+    /// @notice Base token managed by this pilot (e.g. IDRX)
     address public immutable TOKEN;
+
+    /// @notice SuperCluster protocol address
     address public superClusterAddress;
 
-    // Strategy tracking
+    /// @notice List of strategy adapters (DeFi protocols)
     address[] public strategyAdapters;
+
+    /// @notice List of allocations for each adapter (basis points, sum to 10000)
     uint256[] public strategyAllocations;
+
+    /// @notice Mapping to track active adapters
     mapping(address => bool) public isActiveAdapter;
 
-    // Events
+    // --- Events ---
+
+    /// @notice Emitted when strategy is updated
     event StrategyUpdated(address[] adapters, uint256[] allocations);
+
+    /// @notice Emitted when funds are invested
     event Invested(uint256 amount, address[] adapters, uint256[] allocations);
+
+    /// @notice Emitted when funds are divested
     event Divested(uint256 amount, address[] adapters, uint256[] allocations);
+
+    /// @notice Emitted when rewards are harvested
     event Harvested(address[] adapters, uint256 totalHarvested);
 
-    // Errors
+    // --- Errors ---
+
     error InvalidAllocation();
     error AdapterNotActive();
     error InvalidArrayLength();
     error InsufficientBalance();
     error ZeroAmount();
 
+    /**
+     * @dev Deploys Pilot contract.
+     * @param _name Name of pilot.
+     * @param __description Description of pilot.
+     * @param _token Base token address.
+     * @param _superClusterAddress SuperCluster protocol address.
+     */
     constructor(string memory _name, string memory __description, address _token, address _superClusterAddress)
         Ownable(msg.sender)
     {
@@ -42,7 +77,11 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Invest funds according to pilot's strategy
+     * @notice Invest funds according to pilot's strategy.
+     * @param amount Amount of base token to invest.
+     * @param adapters List of adapter addresses.
+     * @param allocations List of allocations (basis points, sum to 10000).
+     * @dev Only owner can call. Funds are distributed to adapters.
      */
     function invest(uint256 amount, address[] calldata adapters, uint256[] calldata allocations)
         external
@@ -53,7 +92,6 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
         if (adapters.length != allocations.length) revert InvalidArrayLength();
 
-        // Validate allocations sum to 10000 (100%)
         uint256 totalAllocation = 0;
         for (uint256 i = 0; i < allocations.length; i++) {
             totalAllocation += allocations[i];
@@ -61,11 +99,9 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
         }
         if (totalAllocation != 10000) revert InvalidAllocation();
 
-        // Check TOKEN balance
         uint256 balance = IERC20(TOKEN).balanceOf(address(this));
         if (balance < amount) revert InsufficientBalance();
 
-        // Distribute funds to adapters
         for (uint256 i = 0; i < adapters.length; i++) {
             uint256 adapterAmount = (amount * allocations[i]) / 10000;
             if (adapterAmount > 0) {
@@ -78,24 +114,26 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Auto-invest funds from SuperCluster
+     * @notice Auto-invest funds from SuperCluster.
+     * @param amount Amount of base token to invest.
+     * @dev Only callable by SuperCluster.
      */
     function receiveAndInvest(uint256 amount) external override {
         require(msg.sender == superClusterAddress, "Only SuperCluster");
 
-        IERC20(TOKEN).transferFrom(msg.sender, address(this), amount);
+        bool status = IERC20(TOKEN).transferFrom(msg.sender, address(this), amount);
+        require(status, "Transfer failed");
 
         IERC20(TOKEN).approve(address(this), amount);
 
-        // Auto-invest based on current strategy
         if (strategyAdapters.length > 0 && strategyAllocations.length > 0) {
             _distributeToAdapters(amount);
         }
-        // If no strategy set, keep idle in pilot
     }
 
     /**
-     * @dev Distribute to adapters based on allocation
+     * @dev Internal: Distribute funds to adapters based on allocation.
+     * @param totalAmount Total amount to distribute.
      */
     function _distributeToAdapters(uint256 totalAmount) internal {
         for (uint256 i = 0; i < strategyAdapters.length; i++) {
@@ -106,10 +144,8 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
                 uint256 adapterAmount = (totalAmount * allocation) / 10000;
 
                 if (adapterAmount > 0) {
-                    // Transfer to adapter
                     IERC20(TOKEN).approve(adapter, adapterAmount);
 
-                    // Trigger deposit
                     IAdapter(adapter).deposit(adapterAmount);
                 }
             }
@@ -117,7 +153,11 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Divest funds from external protocols
+     * @notice Divest funds from external protocols.
+     * @param amount Amount of base token to divest.
+     * @param adapters List of adapter addresses.
+     * @param allocations List of allocations (basis points, sum to 10000).
+     * @dev Only owner can call. Withdraws funds from adapters.
      */
     function divest(uint256 amount, address[] calldata adapters, uint256[] calldata allocations)
         external
@@ -128,7 +168,6 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
         if (amount == 0) revert ZeroAmount();
         if (adapters.length != allocations.length) revert InvalidArrayLength();
 
-        // Validate allocations sum to 10000 (100%)
         uint256 totalAllocation = 0;
         for (uint256 i = 0; i < allocations.length; i++) {
             totalAllocation += allocations[i];
@@ -136,11 +175,9 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
         }
         if (totalAllocation != 10000) revert InvalidAllocation();
 
-        // Withdraw funds from adapters
         for (uint256 i = 0; i < adapters.length; i++) {
             uint256 adapterAmount = (amount * allocations[i]) / 10000;
             if (adapterAmount > 0) {
-                // Convert amount to shares and withdraw
                 uint256 shares = IAdapter(adapters[i]).convertToShares(adapterAmount);
                 IAdapter(adapters[i]).withdraw(shares);
             }
@@ -150,7 +187,9 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Harvest rewards from external protocols
+     * @notice Harvest rewards from external protocols.
+     * @param adapters List of adapter addresses.
+     * @dev Only owner can call. Harvests rewards from adapters.
      */
     function harvest(address[] calldata adapters) external override onlyOwner nonReentrant {
         uint256 totalHarvested = 0;
@@ -166,47 +205,59 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Get current strategy allocation
+     * @notice Get current strategy allocation.
+     * @return adapters List of adapter addresses.
+     * @return allocations List of allocations (basis points).
      */
     function getStrategy() external view override returns (address[] memory adapters, uint256[] memory allocations) {
         return (strategyAdapters, strategyAllocations);
     }
 
     /**
-     * @dev Get pilot's description
+     * @notice Get pilot's description.
+     * @return Description string.
      */
     function description() external view override returns (string memory) {
         return _description;
     }
 
-    // Additional management functions
+    /**
+     * @notice Set pilot name.
+     * @param _name New name.
+     * @dev Only owner can call.
+     */
     function setPilot(string memory _name) external onlyOwner {
         name = _name;
     }
 
+    /**
+     * @notice Set pilot description.
+     * @param __description New description.
+     * @dev Only owner can call.
+     */
     function setDescription(string memory __description) external onlyOwner {
         _description = __description;
     }
 
     /**
-     * @dev Set strategy allocation
+     * @notice Set strategy allocation.
+     * @param adapters List of adapter addresses.
+     * @param allocations List of allocations (basis points, sum to 10000).
+     * @dev Only owner can call.
      */
     function setPilotStrategy(address[] calldata adapters, uint256[] calldata allocations) external onlyOwner {
         if (adapters.length != allocations.length) revert InvalidArrayLength();
 
-        // Validate allocations sum to 10000 (100%)
         uint256 totalAllocation = 0;
         for (uint256 i = 0; i < allocations.length; i++) {
             totalAllocation += allocations[i];
         }
         if (totalAllocation != 10000) revert InvalidAllocation();
 
-        // Clear existing strategy
         for (uint256 i = 0; i < strategyAdapters.length; i++) {
             isActiveAdapter[strategyAdapters[i]] = false;
         }
 
-        // Set new strategy
         strategyAdapters = adapters;
         strategyAllocations = allocations;
 
@@ -218,21 +269,26 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Add adapter to active list
+     * @notice Add adapter to active list.
+     * @param adapter Adapter address.
+     * @dev Only owner can call.
      */
     function addAdapter(address adapter) external onlyOwner {
         isActiveAdapter[adapter] = true;
     }
 
     /**
-     * @dev Remove adapter from active list
+     * @notice Remove adapter from active list.
+     * @param adapter Adapter address.
+     * @dev Only owner can call.
      */
     function removeAdapter(address adapter) external onlyOwner {
         isActiveAdapter[adapter] = false;
     }
 
     /**
-     * @dev Emergency withdraw all IDRX tokens
+     * @notice Emergency withdraw all base tokens to owner.
+     * @dev Only owner can call.
      */
     function emergencyWithdraw() external onlyOwner {
         uint256 balance = IERC20(TOKEN).balanceOf(address(this));
@@ -243,21 +299,22 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Withdraw for user (called by SuperCluster)
+     * @notice Withdraw for user (called by SuperCluster).
+     * @param amount Amount to withdraw.
+     * @dev Only callable by SuperCluster.
      */
     function withdrawForUser(uint256 amount) external override {
         require(msg.sender == superClusterAddress, "Only SuperCluster");
 
-        // Withdraw proportionally from adapters
         _withdrawFromAdapters(amount);
 
-        // Transfer to SuperCluster
         bool status = IERC20(TOKEN).transfer(superClusterAddress, amount);
         require(status, "Transfer failed");
     }
 
     /**
-     * @dev Withdraw from adapters proportionally
+     * @dev Internal: Withdraw from adapters proportionally.
+     * @param totalAmount Total amount to withdraw.
      */
     function _withdrawFromAdapters(uint256 totalAmount) internal {
         for (uint256 i = 0; i < strategyAdapters.length; i++) {
@@ -279,7 +336,8 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
     }
 
     /**
-     * @dev Get total value from all adapters + idle funds
+     * @notice Get total value from all adapters plus idle funds.
+     * @return total Total value in base token.
      */
     function getTotalValue() external view override returns (uint256 total) {
         uint256 totalValue = IERC20(TOKEN).balanceOf(address(this)); // Idle funds
@@ -293,6 +351,10 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
         return totalValue;
     }
 
+    /**
+     * @notice Get total pilot holdings (idle + adapters).
+     * @return total Total holdings in base token.
+     */
     function getTotalPilotHoldings() public view returns (uint256 total) {
         total = IERC20(TOKEN).balanceOf(address(this));
         for (uint256 i = 0; i < strategyAdapters.length; i++) {
@@ -302,6 +364,12 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
         }
     }
 
+    /**
+     * @notice Withdraw to WithdrawManager contract (for queued withdrawals).
+     * @param withdrawManager WithdrawManager contract address.
+     * @param totalAmount Total amount to withdraw.
+     * @dev Only callable by SuperCluster.
+     */
     function withdrawToManager(address withdrawManager, uint256 totalAmount) external {
         require(msg.sender == superClusterAddress, "Only SuperCluster");
         require(totalAmount > 0, "Invalid amount");
@@ -310,10 +378,6 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
         uint256 remainingAmount = totalAmount;
         uint256 totalHoldings = getTotalPilotHoldings();
         require(totalHoldings > 0, "Zero holdings");
-
-        console.log("=== Pilot.withdrawToManager ===");
-        console.log("totalAmount:", totalAmount);
-        console.log("totalHoldings:", totalHoldings);
 
         for (uint256 i = 0; i < strategyAdapters.length; i++) {
             address adapter = strategyAdapters[i];
@@ -331,10 +395,6 @@ contract Pilot is IPilot, Ownable, ReentrancyGuard {
             if (adapterAmount > remainingAmount) {
                 adapterAmount = remainingAmount;
             }
-
-            console.log("Adapter:", adapter);
-            console.log("Adapter balance:", adapterBalance);
-            console.log("Withdraw amount for adapter:", adapterAmount);
 
             IAdapter(adapter).withdrawTo(withdrawManager, adapterAmount);
 
