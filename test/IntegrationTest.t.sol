@@ -35,17 +35,14 @@ contract IntegrationTest is SuperClusterTest {
         // Trigger rebase
         vm.warp(block.timestamp + 1 days);
         idrx.approve(address(superCluster), 100e18);
-        idrx.transfer(address(superCluster), 100e18);
         superCluster.receiveAndInvest(address(pilot), address(idrx), 100e18);
         superCluster.rebase();
         console.log("Rebase completed");
 
         // Simulate yield and rebase again
         idrx.approve(address(superCluster), 100e18);
-        idrx.transfer(address(superCluster), 100e18);
         superCluster.receiveAndInvest(address(pilot), address(idrx), 100e18);
         idrx.approve(address(superCluster), 50e18);
-        idrx.transfer(address(superCluster), 50e18);
         superCluster.receiveAndInvest(address(pilot), address(idrx), 50e18);
 
         vm.warp(block.timestamp + 1 days);
@@ -69,7 +66,6 @@ contract IntegrationTest is SuperClusterTest {
         // Fund WithdrawManager with enough IDRX for the withdrawal (including yield)
         vm.prank(owner);
         idrx.approve(address(superCluster), newSTokenBalance);
-        idrx.transfer(address(superCluster), newSTokenBalance);
         superCluster.receiveAndInvest(address(pilot), address(idrx), newSTokenBalance);
         console.log("WithdrawManager balance after transfer:", idrx.balanceOf(address(withdrawManager)));
 
@@ -114,7 +110,6 @@ contract IntegrationTest is SuperClusterTest {
 
         // Simulate yield
         idrx.approve(address(superCluster), 150e18);
-        idrx.transfer(address(superCluster), 150e18);
         superCluster.receiveAndInvest(address(pilot), address(idrx), 150e18);
 
         // Rebase after yield
@@ -147,7 +142,6 @@ contract IntegrationTest is SuperClusterTest {
 
         // Simulate another yield
         idrx.approve(address(superCluster), 200e18);
-        idrx.transfer(address(superCluster), 200e18);
         superCluster.receiveAndInvest(address(pilot), address(idrx), 200e18);
 
         // Rebase again
@@ -332,7 +326,6 @@ contract IntegrationTest is SuperClusterTest {
 
         // Simulate yield: add yield to pilot and rebase
         idrx.approve(address(superCluster), 300e18);
-        idrx.transfer(address(superCluster), 300e18);
         superCluster.receiveAndInvest(address(pilot), address(idrx), 300e18);
 
         vm.warp(block.timestamp + 1 days);
@@ -383,7 +376,6 @@ contract IntegrationTest is SuperClusterTest {
         vm.prank(owner);
         Withdraw withdrawManager = Withdraw(superCluster.withdrawManager());
         idrx.approve(address(superCluster), sTokenAfterUnwrap1);
-        idrx.transfer(address(superCluster), sTokenAfterUnwrap1);
         superCluster.receiveAndInvest(address(pilot), address(idrx), sTokenAfterUnwrap1);
 
         console.log("Balance manager transfer", idrx.balanceOf(address(withdrawManager)));
@@ -418,7 +410,7 @@ contract IntegrationTest is SuperClusterTest {
         uint256 balanceIdrxBeforeWithdraw2 = idrx.balanceOf(user2);
         console.log("Balance idx user before withdraw:", balanceIdrxBeforeWithdraw2);
 
-        idrx.transfer(address(superCluster), sTokenAfterUnwrap2);
+        idrx.approve(address(superCluster), sTokenAfterUnwrap2);
         superCluster.receiveAndInvest(address(pilot), address(idrx), sTokenAfterUnwrap2);
 
         console.log("Balance manager transfer", idrx.balanceOf(address(withdrawManager)));
@@ -427,6 +419,7 @@ contract IntegrationTest is SuperClusterTest {
         console.log("Balance stoken before withdraw:", sToken.balanceOf(user2));
         console.log("Stoken to withdraw:", sTokenAfterUnwrap2);
 
+        vm.prank(user2);
         withdrawManager.claim(requestId);
 
         uint256 sTokenAfterWithdraw2 = sToken.balanceOf(user2);

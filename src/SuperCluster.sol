@@ -242,6 +242,7 @@ contract SuperCluster is Ownable, ReentrancyGuard {
         if (!registeredPilots[pilot]) revert PilotNotRegistered();
         if (IERC20(token).balanceOf(msg.sender) < amount) revert InsufficientBalance();
 
+        IERC20(token).safeTransferFrom(msg.sender, address(this), amount);
         IERC20(token).approve(pilot, amount);
         IPilot(pilot).receiveAndInvest(amount);
     }
